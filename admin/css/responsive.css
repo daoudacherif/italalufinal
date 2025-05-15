@@ -1,0 +1,329 @@
+/**************************************************************
+ * Global Mobile-First Base Styles
+ **************************************************************/
+ html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 12px;
+    color: #666;
+    overflow-x: hidden;
+  }
+  
+  * {
+    outline: none !important;
+    -moz-outline: none !important;
+  }
+  
+  /* Global resets for elements if needed */
+  a {
+    color: #666;
+    text-decoration: none;
+  }
+  a:hover, a:focus {
+    color: #28b779;
+  }
+  
+  /* General elements (dropdowns, buttons, inputs, etc.) remain unchanged */
+  .dropdown-menu {
+    min-width: 180px;
+  }
+  .dropdown-menu > li > a {
+    padding: 3px 10px;
+    font-size: 12px;
+  }
+  
+  /* ... other non-layout-specific rules continue here ... */
+  
+  
+  /**************************************************************
+   * Mobile-First Layout
+   **************************************************************/
+  /* HEADER */
+  #header {
+    width: 100%;
+    position: relative;
+    padding: 10px;
+    background: #fff;
+  }
+  
+  #header h1 {
+    background: url("../img/logo.png") no-repeat left center transparent;
+    max-width: 80%;
+    height: auto;
+    margin: 0 auto;
+    font-size: 18px; /* tuned for mobile */
+  }
+  
+  /* SEARCH */
+  #search {
+    position: relative;
+    margin-top: 10px;
+    text-align: center;
+  }
+  #search input[type=text] {
+    padding: 4px 10px;
+    width: 80%;
+    border: none;
+  }
+  
+  /* TOP USER NAVIGATION */
+  #user-nav {
+    width: 100%;
+    background: #2E363F;
+    text-align: center;
+    margin: 0;
+    padding: 5px 0;
+  }
+  #user-nav > ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  #user-nav > ul > li {
+    border-bottom: 1px solid #363E48;
+  }
+  #user-nav > ul > li > a {
+    display: block;
+    padding: 5px;
+    font-size: 0.9rem;
+    color: #fff;
+  }
+  
+  /* Sidebar – hidden by default on mobile */
+  #sidebar {
+    width: 100%;
+    background: #2E363F;
+    display: none;  /* Option: toggle via JavaScript when #my_menu_input is clicked */
+    padding: 10px;
+  }
+  #sidebar > ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  #sidebar > ul > li {
+    padding: 10px;
+    border-top: 1px solid #41BEDD;
+    color: #AAAAAA;
+  }
+  
+  /* Main Content */
+  #content {
+    width: 100%;
+    margin: 0;
+    padding: 15px;
+    background: #eeeeee;
+    box-sizing: border-box;
+  }
+  #content-header {
+    text-align: center;
+    margin-top: 0;
+  }
+  #content-header h1 {
+    font-size: 18px;
+    padding-top: 15px;
+  }
+  
+  /* DataTables and Table adjustments */
+  .table th {
+    padding: 5px 4px 2px;
+    font-size: 10px;
+    text-align: center;
+  }
+  .dataTables_paginate .ui-button,
+  .pagination.alternate li a {
+    padding: 4px 4px !important;
+    font-size: 12px;
+  }
+  
+  
+  /**************************************************************
+   * Mobile-Specific Adjustments (max-width: 480px)
+   **************************************************************/
+  @media (max-width: 480px) {
+    /* Show hamburger menu icon instead of full menu */
+    #my_menu {
+      display: none;
+    }
+    #my_menu_input {
+      display: block;
+      font-size: 24px;
+      cursor: pointer;
+      text-align: center;
+      padding: 5px;
+    }
+    
+    /* Adjust user-nav list for stacking */
+    #user-nav > ul {
+      flex-direction: column;
+      text-align: left;
+    }
+    
+    /* Ensure sidebar content remains collapsed */
+    #sidebar .content {
+      display: none;
+    }
+    
+    /* Reset margins in content area */
+    #content {
+      margin-left: 0 !important;
+    }
+    
+    /* Adjust header h1 position */
+    #header h1 {
+      top: 10px;
+      left: 5px;
+    }
+    
+    /* Adjust content header button group if any */
+    #content-header .btn-group {
+      display: block;
+      margin: 10px auto;
+      text-align: center;
+    }
+    
+    /* DataTables specific tweaks */
+    .dataTables_length {
+      width: 100%;
+      text-align: center;
+    }
+  }
+  
+  
+  /**************************************************************
+   * Tablet Breakpoints (481px to 970px)
+   **************************************************************/
+  @media (min-width: 481px) and (max-width: 970px) {
+    body {
+      background: #49CCED;
+    }
+    
+    /* Adjust header position */
+    #header h1 {
+      top: 10px;
+      left: 35px;
+    }
+    
+    /* Search input repositioned slightly */
+    #search {
+      top: 5px;
+      text-align: right;
+      padding: 0 10px;
+    }
+    
+    /* Collapsed Sidebar: show a slim sidebar */
+    #sidebar, #sidebar > ul {
+      width: 43px;
+      display: block;
+      position: absolute;
+      height: 100%;
+      z-index: 1;
+      left: 0;
+    }
+    #sidebar > ul > li {
+      text-align: center;
+    }
+    #sidebar > ul li ul {
+      position: absolute;
+      left: 43px;
+      top: 0;
+      min-width: 150px;
+      background: #2E363F;
+      display: none;
+    }
+    #sidebar > ul li:hover ul {
+      display: block;
+    }
+    
+    /* Content shifts right to accommodate sidebar */
+    #content {
+      margin-left: 43px;
+    }
+  }
+  
+  
+  /**************************************************************
+   * Breakpoints for Small Tablets (max-width: 600px) and 767px
+   **************************************************************/
+  @media (max-width: 600px) {
+    .widget-title .buttons {
+      float: left;
+    }
+    
+    .panel-right {
+      border-top: 1px solid #DDDDDD;
+      border-left: none;
+      position: relative;
+      top: auto;
+      right: auto;
+      height: auto;
+      width: auto;
+    }
+    
+    #sidebar .content {
+      display: none;
+    }
+  }
+  
+  @media (max-width: 767px) {
+    body {
+      padding: 0 !important;
+    }
+    .container-fluid {
+      padding: 0 20px;
+    }
+    #search {
+      display: none;
+    }
+    #user-nav > ul > li > a > span.text {
+      display: none;
+    }
+    #sidebar .content {
+      display: none;
+    }
+  }
+  
+  
+  /**************************************************************
+   * Medium Breakpoints (768px to 979px) – adjust grid layouts
+   **************************************************************/
+  @media (min-width: 768px) and (max-width: 979px) {
+    [class*="span"],
+    .row-fluid [class*="span"] {
+      display: block;
+      float: none;
+      width: auto;
+      margin-left: 0;
+    }
+  }
+  
+  
+  /**************************************************************
+   * Breakpoints for Many Tablets / Small Desktops (max-width: 979px)
+   **************************************************************/
+  @media (max-width: 979px) {
+    div.dataTables_wrapper .ui-widget-header {
+      height: 68px;
+    }
+    .dataTables_filter {
+      position: relative;
+      top: 0;
+      text-align: center;
+    }
+    .dataTables_length {
+      width: 100%;
+      text-align: center;
+    }
+    .dataTables_paginate {
+      text-align: center;
+    }
+    #sidebar .content {
+      display: none;
+    }
+  }
+   
