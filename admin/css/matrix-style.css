@@ -1350,7 +1350,7 @@ body, html {
   
 	/* Sidebar & Content */
 	#sidebar {
-	  position: relative;
+	  position: fixed;
 	  width: 100% !important;
 	  float: none;
 	  top: 0;

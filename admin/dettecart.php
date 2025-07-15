@@ -1,4 +1,4 @@
-<?php
+<?php 
 session_start();
 error_reporting(E_ALL);
 include('includes/dbconnection.php');
@@ -18,124 +18,93 @@ $adminData = mysqli_fetch_assoc($adminQuery);
 $currentAdminName = $adminData['AdminName'];
 
 /**
- * Obtenir un access token OAuth2 de Nimba using cURL.
- */
-function getAccessToken() {
-    $url = "https://api.nimbasms.com/v1/oauth/token";  // Verify this URL with your Nimba documentation.
-    
-    // Replace with your real credentials
-    $client_id     = "1608e90e20415c7edf0226bf86e7effd";      
-    $client_secret = "kokICa68N6NJESoJt09IAFXjO05tYwdVV-Xjrql7o8pTi29ssdPJyNgPBdRIeLx6_690b_wzM27foyDRpvmHztN7ep6ICm36CgNggEzGxRs";
-    
-    // Encode the credentials in Base64 ("client_id:client_secret")
-    $credentials = base64_encode($client_id . ":" . $client_secret);
-    
-    $headers = array(
-        "Authorization: Basic " . $credentials,
-        "Content-Type: application/x-www-form-urlencoded"
-    );
-    
-    $postData = http_build_query(array(
-        "grant_type" => "client_credentials"
-    ));
-    
-    // Use cURL for the POST request
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);  // For development only!
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    
-    if ($response === FALSE) {
-        $error = curl_error($ch);
-        error_log("cURL error while obtaining token: " . $error);
-        curl_close($ch);
-        return false;
-    }
-    curl_close($ch);
-    
-    if ($httpCode != 200) {
-        error_log("Error obtaining access token. HTTP Code: $httpCode. Response: $response");
-        return false;
-    }
-    
-    $decoded = json_decode($response, true);
-    if (!isset($decoded['access_token'])) {
-        error_log("API error (token): " . print_r($decoded, true));
-        return false;
-    }
-    return $decoded['access_token'];
-}
-
-/**
- * Function to send an SMS via the Nimba API.
- * The message content is passed via the $message parameter.
- * The payload sent is logged so you can verify the SMS content.
+ * FONCTION SMS SIMPLIFIÉE - Un seul sender_name pour éviter les doubles débits
  */
 function sendSmsNotification($to, $message) {
-    // Nimba API endpoint for sending SMS
+    // 1. Validation des paramètres d'entrée
+    if (empty($to) || empty($message)) {
+        error_log("Nimba SMS Error: Numéro ou message vide");
+        return false;
+    }
+    
+    // 2. Nettoyage et validation du numéro
+    $to = trim($to);
+    $to = preg_replace('/[^0-9+]/', '', $to);
+    
+    if (!preg_match('/^(\+?224)?6[0-9]{8}$/', $to)) {
+        error_log("Nimba SMS Error: Format de numéro invalide: $to");
+        return false;
+    }
+    
+    // 3. Validation longueur message
+    if (strlen($message) > 665) {
+        error_log("Nimba SMS Error: Message trop long (" . strlen($message) . " caractères)");
+        return false;
+    }
+    
+    // 4. Configuration API Nimba
     $url = "https://api.nimbasms.com/v1/messages";
+    $service_id = "0b0aa04ddcf33f25a796fc8aac76b66e";
+    $secret_token = "Lt-PsM_2LdTPZPtkCmL5DXHiRJVcJRlj8p5nTxQap9iPJoknVoyXGR8uv-wT6aVEErBgJBRoqPbp8cHyKGzqgSw3CkC_ypLH4u8SAV3NjH8";
+    $sender_name = "SMS 9080"; // Sender unique qui fonctionne
     
-    // Replace with your actual service credentials (as provided by Nimba)
-    $service_id    = "1608e90e20415c7edf0226bf86e7effd";    
-    $secret_token  = "kokICa68N6NJESoJt09IAFXjO05tYwdVV-Xjrql7o8pTi29ssdPJyNgPBdRIeLx6_690b_wzM27foyDRpvmHztN7ep6ICm36CgNggEzGxRs";
-    
-    // Build the Basic Auth string (Base64 of "service_id:secret_token")
     $authString = base64_encode($service_id . ":" . $secret_token);
     
-    // Prepare the JSON payload with recipient, message and sender_name
-    $payload = array(
-        "to"          => array($to),
-        "message"     => $message,
-        "sender_name" => "SMS 9080"   // Replace with your approved sender name with Nimba
-    );
-    $postData = json_encode($payload);
+    // 5. Préparation des données (un seul envoi)
+    $postData = json_encode([
+        "sender_name" => $sender_name,
+        "to" => [$to],
+        "message" => $message
+    ]);
     
-    // Log the payload for debugging (check your server error logs)
-    error_log("Nimba SMS Payload: " . $postData);
-    
-    $headers = array(
+    $headers = [
         "Authorization: Basic " . $authString,
-        "Content-Type: application/json"
-    );
+        "Content-Type: application/json",
+        "Content-Length: " . strlen($postData)
+    ];
     
-    $options = array(
-        "http" => array(
-            "method"        => "POST",
-            "header"        => implode("\r\n", $headers),
-            "content"       => $postData,
-            "ignore_errors" => true
-        )
-    );
+    // Log simplifié
+    error_log("Nimba SMS - Envoi vers: $to avec sender: $sender_name");
     
-    $context = stream_context_create($options);
-    $response = file_get_contents($url, false, $context);
+    // 6. Envoi avec cURL (une seule tentative)
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_POST => true,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_POSTFIELDS => $postData,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_CONNECTTIMEOUT => 10
+    ]);
     
-    // Log complete API response for debugging
-    error_log("Nimba API SMS Response: " . $response);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
     
-    // Retrieve HTTP status code from response headers
-    $http_response_header = isset($http_response_header) ? $http_response_header : array();
-    if (empty($http_response_header)) {
-        error_log("No HTTP response headers - SMS send failed");
+    // Log de la réponse
+    error_log("Nimba SMS - HTTP: $httpCode | Response: $response");
+    
+    if ($curlError) {
+        error_log("Nimba SMS - Curl Error: $curlError");
         return false;
     }
     
-    $status_line = $http_response_header[0];
-    preg_match('{HTTP\/\S*\s(\d{3})}', $status_line, $match);
-    $status_code = isset($match[1]) ? $match[1] : 0;
-    
-    if ($status_code != 201) {
-        error_log("SMS send failed. HTTP Code: $status_code. Details: " . print_r(json_decode($response, true), true));
+    // Vérification du succès (201)
+    if ($httpCode == 201) {
+        $responseData = json_decode($response, true);
+        if (isset($responseData['messageid'])) {
+            error_log("✅ Nimba SMS - SUCCESS | Message ID: " . $responseData['messageid']);
+        }
+        return true;
+    } else {
+        error_log("❌ Nimba SMS - ECHEC | Code: $httpCode");
         return false;
     }
-    
-    return true;
 }
+
 // ----------- Gestion Panier -----------
 
 // Ajout au panier
@@ -149,17 +118,17 @@ if (isset($_POST['addtocart'])) {
     if ($row = mysqli_fetch_assoc($stockCheck)) {
         // Vérification que le stock est strictement supérieur à 0
         if ($row['Stock'] <= 0) {
-            echo "<script>alert('Article \"" . htmlspecialchars($row['ProductName']) . "\" en rupture de stock.'); window.location='dettecart.php';</script>";
+            echo "<script>alert(" . json_encode("Article \"{$row['ProductName']}\" en rupture de stock.") . "); window.location='dettecart.php';</script>";
             exit;
         }
         
         // Vérification que la quantité demandée est disponible
         if ($row['Stock'] < $quantity) {
-            echo "<script>alert('Stock insuffisant pour \"" . htmlspecialchars($row['ProductName']) . "\". Stock disponible: " . $row['Stock'] . "'); window.location='dettecart.php';</script>";
+            echo "<script>alert(" . json_encode("Stock insuffisant pour \"{$row['ProductName']}\". Stock disponible: {$row['Stock']}") . "); window.location='dettecart.php';</script>";
             exit;
         }
     } else {
-        echo "<script>alert('Article introuvable.'); window.location='dettecart.php';</script>";
+        echo "<script>alert(" . json_encode("Article introuvable.") . "); window.location='dettecart.php';</script>";
         exit;
     }
 
@@ -170,7 +139,7 @@ if (isset($_POST['addtocart'])) {
         $newQty = $c['ProductQty'] + $quantity;
         // Vérification que la nouvelle quantité totale ne dépasse pas le stock disponible
         if ($newQty > $row['Stock']) {
-            echo "<script>alert('Quantité totale demandée (" . $newQty . ") supérieure au stock disponible (" . $row['Stock'] . ") pour \"" . htmlspecialchars($row['ProductName']) . "\".'); window.location='dettecart.php';</script>";
+            echo "<script>alert(" . json_encode("Quantité totale demandée ($newQty) supérieure au stock disponible ({$row['Stock']}) pour \"{$row['ProductName']}\".") . "); window.location='dettecart.php';</script>";
             exit;
         }
         mysqli_query($con, "UPDATE tblcreditcart SET ProductQty='$newQty', Price='$price' WHERE ID='{$c['ID']}'") or die(mysqli_error($con));
@@ -227,6 +196,7 @@ if (isset($_POST['applyDiscount'])) {
 $discount = $_SESSION['credit_discount'] ?? 0;
 $discountType = $_SESSION['credit_discountType'] ?? 'absolute';
 $discountValue = $_SESSION['credit_discountValue'] ?? 0;
+
 // Vérifier les stocks pour l'affichage
 $hasStockIssue = false;
 $stockIssueProducts = [];
@@ -238,12 +208,15 @@ while ($row = mysqli_fetch_assoc($productQuery)) {
     $productNames[] = $row['ProductName'];
 }
 
-// Checkout + Facturation
+// Checkout + Facturation - VERSION SIMPLIFIÉE SANS DOUBLE ENVOI
 if (isset($_POST['submit'])) {
     $custname = mysqli_real_escape_string($con, trim($_POST['customername']));
     $custmobile = preg_replace('/[^0-9+]/', '', $_POST['mobilenumber']);
     $modepayment = mysqli_real_escape_string($con, $_POST['modepayment']);
     $paidNow = max(0, floatval($_POST['paid']));
+    
+    // Vérifier si l'utilisateur veut envoyer un SMS
+    $sendSms = isset($_POST['send_sms']) && $_POST['send_sms'] == '1';
 
     // Calcul total du panier
     $grandTotal = 0;
@@ -275,64 +248,114 @@ if (isset($_POST['submit'])) {
     }
     
     if (!empty($stockErrors)) {
-        $errorMsg = "Impossible de finaliser la commande:\n- " . implode("\n- ", $stockErrors);
+        $errorMsg = "Impossible de finaliser la commande:\\n- " . implode("\\n- ", $stockErrors);
         echo "<script>alert(" . json_encode($errorMsg) . "); window.location='dettecart.php';</script>";
         exit;
     }
 
-    $billingnum = mt_rand(100000000, 999999999);
+    $billingnum = mt_rand(1000, 9999);
 
-    // Validation du panier + Création facture
-    $queries = "
-        UPDATE tblcreditcart SET BillingId='$billingnum', IsCheckOut=1 WHERE IsCheckOut=0;
-        INSERT INTO tblcustomer(BillingNumber, CustomerName, MobileNumber, ModeOfPayment, BillingDate, FinalAmount, Paid, Dues)
-        VALUES('$billingnum', '$custname', '$custmobile', '$modepayment', NOW(), '$netTotal', '$paidNow', '$dues');
-    ";
-    if (mysqli_multi_query($con, $queries)) {
-        while (mysqli_more_results($con) && mysqli_next_result($con)) {}
-
-        // Décrémentation du stock
-        mysqli_query($con, "
+    // Start transaction for data consistency
+    mysqli_autocommit($con, FALSE);
+    
+    try {
+        // 1. Update cart with billing number
+        $updateCart = mysqli_query($con, "UPDATE tblcreditcart SET BillingId='$billingnum', IsCheckOut=1 WHERE IsCheckOut=0");
+        if (!$updateCart) throw new Exception('Failed to update cart');
+        
+        // 2. Insert customer record
+        $insertCustomer = mysqli_query($con, "
+            INSERT INTO tblcustomer(BillingNumber, CustomerName, MobileNumber, ModeOfPayment, BillingDate, FinalAmount, Paid, Dues)
+            VALUES('$billingnum', '$custname', '$custmobile', '$modepayment', NOW(), '$netTotal', '$paidNow', '$dues')
+        ");
+        if (!$insertCustomer) throw new Exception('Failed to insert customer record');
+        
+        // Get the customer ID for the payment record
+        $customerId = mysqli_insert_id($con);
+        
+        // 3. Insert payment record ONLY if there was an actual payment
+        if ($paidNow > 0) {
+            $paymentReference = "INV-$billingnum-INITIAL"; // Generate a reference for initial payment
+            $paymentComments = "Paiement initial lors de la facturation";
+            
+            $insertPayment = mysqli_query($con, "
+                INSERT INTO tblpayments(CustomerID, BillingNumber, PaymentAmount, PaymentDate, PaymentMethod, ReferenceNumber, Comments)
+                VALUES('$customerId', '$billingnum', '$paidNow', NOW(), '$modepayment', '$paymentReference', '$paymentComments')
+            ");
+            if (!$insertPayment) throw new Exception('Failed to insert payment record');
+        }
+        
+        // 4. Update product stock
+        $updateStock = mysqli_query($con, "
             UPDATE tblproducts p
             JOIN tblcreditcart c ON p.ID = c.ProductId
             SET p.Stock = p.Stock - c.ProductQty
             WHERE c.BillingId='$billingnum'
               AND c.IsCheckOut = 1
-        ") or die(mysqli_error($con));
+        ");
+        if (!$updateStock) throw new Exception('Failed to update stock');
+        
+        // Commit transaction
+        mysqli_commit($con);
+        mysqli_autocommit($con, TRUE);
+        
+        // Variable pour le message de résultat
+        $smsStatusMessage = "";
+        
+        // ENVOI SMS SIMPLIFIÉ (UN SEUL ENVOI)
+        if ($sendSms) {
+            // Message SMS
+            if ($dues > 0) {
+                $smsMessage = "Bonjour $custname, votre commande (Facture No: $billingnum) a été validée. Solde dû: " . number_format($dues, 0, ',', ' ') . " GNF. Merci.";
+            } else {
+                $smsMessage = "Bonjour $custname, votre commande (Facture No: $billingnum) a été validée avec succès. Merci pour votre confiance.";
+            }
 
-        // SMS personnalisé avec vérification du statut d'envoi
-        if ($dues > 0) {
-            $smsMessage = "Bonjour $custname, votre commande est enregistrée. Solde dû: " . number_format($dues, 0, ',', ' ') . " GNF.";
+            // UN SEUL ENVOI - Pas de fallback pour éviter les doubles débits
+            error_log("=== ENVOI SMS FACTURE $billingnum ===");
+            $smsResult = sendSmsNotification($custmobile, $smsMessage);
+            error_log("=== FIN ENVOI SMS ===");
+
+            // Journal de l'envoi SMS (si la table existe)
+            $tableExists = mysqli_query($con, "SHOW TABLES LIKE 'tbl_sms_logs'");
+            if (mysqli_num_rows($tableExists) > 0) {
+                $smsLogQuery = "INSERT INTO tbl_sms_logs (recipient, message, status, send_date) 
+                               VALUES ('$custmobile', '" . mysqli_real_escape_string($con, $smsMessage) . "', " . 
+                               ($smsResult ? '1' : '0') . ", NOW())";
+                mysqli_query($con, $smsLogQuery);
+            }
+            
+            // Message de statut simple
+            if ($smsResult) {
+                $smsStatusMessage = " - SMS envoyé ✅";
+            } else {
+                $smsStatusMessage = " - Échec SMS ❌";
+            }
         } else {
-            $smsMessage = "Bonjour $custname, votre commande est confirmée. Merci pour votre confiance !";
+            $smsStatusMessage = " - SMS non envoyé";
         }
 
-        // Envoyer le SMS et stocker le résultat (true/false)
-        $smsResult = sendSmsNotification($custmobile, $smsMessage);
-
-        // Journal de l'envoi SMS (si la table existe)
-        $tableExists = mysqli_query($con, "SHOW TABLES LIKE 'tbl_sms_logs'");
-        if (mysqli_num_rows($tableExists) > 0) {
-            $smsLogQuery = "INSERT INTO tbl_sms_logs (recipient, message, status, send_date) 
-                           VALUES ('$custmobile', '" . mysqli_real_escape_string($con, $smsMessage) . "', " . 
-                           ($smsResult ? '1' : '0') . ", NOW())";
-            mysqli_query($con, $smsLogQuery);
-        }
-
+        // Clear session variables
         unset($_SESSION['credit_discount']);
         unset($_SESSION['credit_discountType']);
         unset($_SESSION['credit_discountValue']);
         $_SESSION['invoiceid'] = $billingnum;
 
-        // Afficher le statut de l'envoi SMS dans le message d'alerte
-        if ($smsResult) {
-            echo "<script>alert('Facture créée: $billingnum - SMS envoyé avec succès'); window.location='invoice_dettecard.php?print=auto';</script>";
-        } else {
-            echo "<script>alert('Facture créée: $billingnum - ÉCHEC de l\'envoi du SMS'); window.location='invoice_dettecard.php?print=auto';</script>";
+        // Prepare success message with payment info
+        $paymentInfo = "";
+        if ($paidNow > 0) {
+            $paymentInfo = " - Paiement: " . number_format($paidNow, 0, ',', ' ') . " GNF";
         }
+
+        // Afficher le message simple
+        echo "<script>alert(" . json_encode("Facture créée: $billingnum$paymentInfo$smsStatusMessage") . "); window.location='invoice_dettecard.php?print=auto';</script>";
         exit;
-    } else {
-        die('Erreur SQL : ' . mysqli_error($con));
+        
+    } catch (Exception $e) {
+        // Rollback transaction on error
+        mysqli_rollback($con);
+        mysqli_autocommit($con, TRUE);
+        die('Erreur lors de la création de la facture: ' . $e->getMessage() . ' - ' . mysqli_error($con));
     }
 }
 
@@ -411,6 +434,32 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
         .user-cart-indicator i {
             margin-right: 5px;
             color: #27a9e3;
+        }
+        
+        .sms-option {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        
+        .sms-option label {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0;
+            font-weight: normal;
+        }
+        
+        .sms-option input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        
+        .sms-option .help-text {
+            font-size: 12px;
+            color: #6c757d;
+            margin-left: 20px;
+            margin-top: 5px;
         }
     </style>
 </head>
@@ -592,9 +641,6 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                     </form>
                     <hr>
 
-
-                    
-  
                     <!-- FORMULAIRE DE CHECKOUT (informations client + montant payé) -->
                     <form method="post" class="form-horizontal" name="submit">
                         <div class="control-group">
@@ -606,14 +652,14 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                         <div class="control-group">
                             <label class="control-label">Numéro de Mobile :</label>
                             <div class="controls">
-                                <!-- Validation pour le format guinéen : +224 suivi de 9 chiffres -->
                                 <input type="tel"
                                        class="span11"
                                        name="mobilenumber"
                                        required
-                                       pattern="^\+224[0-9]{9}$"
-                                       placeholder="+224-XXXXXXXXX"
-                                       title="Format: +224 suivi de 9 chiffres">
+                                       pattern="^(\+?224)?6[0-9]{8}$"
+                                       placeholder="623XXXXXXXX ou +224623XXXXXXXX"
+                                       title="Format: 623XXXXXXXX, 224623XXXXXXXX ou +224623XXXXXXXX">
+                                <span class="help-inline">Formats acceptés: 623XXXXXXXX, 224623XXXXXXXX, +224623XXXXXXXX</span>
                             </div>
                         </div>
                         <div class="control-group">
@@ -631,10 +677,26 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                 <p style="font-size: 12px; color: #666;">(Laissez 0 si rien n'est payé maintenant)</p>
                             </div>
                         </div>
+                        
+                        <!-- Option SMS simplifiée -->
+                        <div class="control-group">
+                            <label class="control-label">Notification SMS :</label>
+                            <div class="controls">
+                                <div class="sms-option">
+                                    <label>
+                                        <input type="checkbox" name="send_sms" value="1" checked>
+                                        <i class="icon-comment"></i> Envoyer un SMS de confirmation au client
+                                    </label>
+                                    <div class="help-text">
+                                        Le client recevra un SMS avec les détails de sa commande et le solde à payer si applicable.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
   
                         <div class="form-actions" style="text-align:center;">
                             <button class="btn btn-primary" type="submit" name="submit" <?php echo $hasStockIssue ? 'disabled' : ''; ?>>
-                                Valider & Créer la Facture
+                                <i class="icon-ok"></i> Valider & Créer la Facture
                             </button>
                         </div>
                     </form>
@@ -691,79 +753,132 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                             if ($stock <= 0) {
                                                 $stockStatus = '<span class="stock-warning">RUPTURE</span>';
                                             } elseif ($stock < $pq) {
-                                                $stockStatus = '<span class="stock-warning">INSUFFISANT</span>';}
-                                                ?>
-                                                <tr <?php echo $rowClass; ?>>
-                                                    <td><?php echo $cnt; ?></td>
-                                                    <td><?php echo $row['ProductName']; ?></td>
-                                                    <td><?php echo $pq; ?></td>
-                                                    <td>
-                                                        <?php echo $stock; ?>
-                                                        <?php echo $stockStatus; ?>
-                                                    </td>
-                                                    <td><?php echo number_format($ppu, 2); ?></td>
-                                                    <td><?php echo number_format($lineTotal, 2); ?></td>
-                                                    <td>
-                                                        <a href="dettecart.php?delid=<?php echo $row['cid']; ?>"
-                                                           onclick="return confirm('Voulez-vous vraiment supprimer cet article ?');">
-                                                            <i class="icon-trash"></i>
-                                                        </a>
-                                                    </td>
-                                                </tr>
-                                                <?php
-                                                $cnt++;
-                                            }
-                                            $netTotal = $grandTotal - $discount;
-                                            if ($netTotal < 0) {
-                                                $netTotal = 0;
+                                                $stockStatus = '<span class="stock-warning">INSUFFISANT</span>';
                                             }
                                             ?>
-                                           <!-- Affichage de la remise dans le tableau des totaux -->
-                                            <tr>
-                                                <th colspan="5" style="text-align: right; font-weight: bold;">Total Général</th>
-                                                <th colspan="2" style="text-align: center; font-weight: bold;"><?php echo number_format($grandTotal, 2); ?></th>
-                                            </tr>
-                                            <tr>
-                                                <th colspan="5" style="text-align: right; font-weight: bold;">
-                                                    Remise
-                                                    <?php if ($discountType == 'percentage'): ?>
-                                                        (<?php echo $discountValue; ?>%)
-                                                    <?php endif; ?>
-                                                </th>
-                                                <th colspan="2" style="text-align: center; font-weight: bold;"><?php echo number_format($discount, 2); ?></th>
-                                            </tr>
-                                            <tr>
-                                                <th colspan="5" style="text-align: right; font-weight: bold; color: green;">Total Net</th>
-                                                <th colspan="2" style="text-align: center; font-weight: bold; color: green;"><?php echo number_format($netTotal, 2); ?></th>
-                                            </tr>
-                                            <?php
-                                        } else {
-                                            ?>
-                                            <tr>
-                                                <td colspan="7" style="color:red; text-align:center;">Aucun article trouvé dans le panier</td>
+                                            <tr <?php echo $rowClass; ?>>
+                                                <td><?php echo $cnt; ?></td>
+                                                <td><?php echo $row['ProductName']; ?></td>
+                                                <td><?php echo $pq; ?></td>
+                                                <td>
+                                                    <?php echo $stock; ?>
+                                                    <?php echo $stockStatus; ?>
+                                                </td>
+                                                <td><?php echo number_format($ppu, 2); ?></td>
+                                                <td><?php echo number_format($lineTotal, 2); ?></td>
+                                                <td>
+                                                    <a href="dettecart.php?delid=<?php echo $row['cid']; ?>"
+                                                       onclick="return confirm('Voulez-vous vraiment supprimer cet article ?');">
+                                                        <i class="icon-trash"></i>
+                                                    </a>
+                                                </td>
                                             </tr>
                                             <?php
+                                            $cnt++;
+                                        }
+                                        $netTotal = $grandTotal - $discount;
+                                        if ($netTotal < 0) {
+                                            $netTotal = 0;
                                         }
                                         ?>
-                                    </tbody>
-                                </table>
-                            </div><!-- widget-content -->
-                        </div><!-- widget-box -->
-                    </div>
-                </div><!-- row-fluid -->
-            </div><!-- container-fluid -->
-        </div><!-- content -->
-      
-        <!-- Footer -->
-        <?php include_once('includes/footer.php'); ?>
-        <!-- SCRIPTS -->
-        <script src="js/jquery.min.js"></script>
-        <script src="js/jquery.ui.custom.js"></script>
-        <script src="js/bootstrap.min.js"></script>
-        <script src="js/jquery.uniform.js"></script>
-        <script src="js/select2.min.js"></script>
-        <script src="js/jquery.dataTables.min.js"></script>
-        <script src="js/matrix.js"></script>
-        <script src="js/matrix.tables.js"></script>
-    </body>
-    </html>
+                                       <!-- Affichage de la remise dans le tableau des totaux -->
+                                        <tr>
+                                            <th colspan="5" style="text-align: right; font-weight: bold;">Total Général</th>
+                                            <th colspan="2" style="text-align: center; font-weight: bold;"><?php echo number_format($grandTotal, 2); ?></th>
+                                        </tr>
+                                        <tr>
+                                            <th colspan="5" style="text-align: right; font-weight: bold;">
+                                                Remise
+                                                <?php if ($discountType == 'percentage'): ?>
+                                                    (<?php echo $discountValue; ?>%)
+                                                <?php endif; ?>
+                                            </th>
+                                            <th colspan="2" style="text-align: center; font-weight: bold;"><?php echo number_format($discount, 2); ?></th>
+                                        </tr>
+                                        <tr>
+                                            <th colspan="5" style="text-align: right; font-weight: bold; color: green;">Total Net</th>
+                                            <th colspan="2" style="text-align: center; font-weight: bold; color: green;"><?php echo number_format($netTotal, 2); ?></th>
+                                        </tr>
+                                        <?php
+                                    } else {
+                                        ?>
+                                        <tr>
+                                            <td colspan="7" style="color:red; text-align:center;">Aucun article trouvé dans le panier</td>
+                                        </tr>
+                                        <?php
+                                    }
+                                    ?>
+                                </tbody>
+                            </table>
+                        </div><!-- widget-content -->
+                    </div><!-- widget-box -->
+                </div>
+            </div><!-- row-fluid -->
+        </div><!-- container-fluid -->
+    </div><!-- content -->
+  
+    <!-- Footer -->
+    <?php include_once('includes/footer.php'); ?>
+    <!-- SCRIPTS -->
+    <script src="js/jquery.min.js"></script>
+    <script src="js/jquery.ui.custom.js"></script>
+    <script src="js/bootstrap.min.js"></script>
+    <script src="js/jquery.uniform.js"></script>
+    <script src="js/select2.min.js"></script>
+    <script src="js/jquery.dataTables.min.js"></script>
+    <script src="js/matrix.js"></script>
+    <script src="js/matrix.tables.js"></script>
+
+    <!-- Script de validation du formulaire en temps réel -->
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Validation du numéro de téléphone en temps réel
+        const mobileInput = document.querySelector('input[name="mobilenumber"]');
+        const nimbaFormats = /^(\+?224)?6[0-9]{8}$/;
+        
+        if (mobileInput) {
+            mobileInput.addEventListener('input', function() {
+                const value = this.value.replace(/[^0-9+]/g, ''); // Nettoyer
+                this.value = value;
+                
+                if (value && !nimbaFormats.test(value)) {
+                    this.style.borderColor = '#d9534f';
+                    this.title = 'Format invalide. Utilisez: 623XXXXXXXX, 224623XXXXXXXX ou +224623XXXXXXXX';
+                } else {
+                    this.style.borderColor = '#28a745';
+                    this.title = 'Format valide';
+                }
+            });
+        }
+        
+        // Validation de la longueur du message SMS
+        const form = document.querySelector('form[name="submit"]');
+        if (form) {
+            form.addEventListener('submit', function(e) {
+                const customerName = document.querySelector('input[name="customername"]').value;
+                const mobile = document.querySelector('input[name="mobilenumber"]').value;
+                const sendSms = document.querySelector('input[name="send_sms"]').checked;
+                
+                if (sendSms) {
+                    // Simuler le message SMS qui sera envoyé
+                    const testMessage = `Bonjour ${customerName}, votre commande (Facture No: 1234) a été validée. Solde dû: 100 000 GNF. Merci.`;
+                    
+                    if (testMessage.length > 665) {
+                        alert('Le message SMS généré sera trop long (' + testMessage.length + ' caractères). Limite: 665 caractères. Raccourcissez le nom du client.');
+                        e.preventDefault();
+                        return false;
+                    }
+                    
+                    // Vérifier le format du numéro avant envoi
+                    if (!nimbaFormats.test(mobile.replace(/[^0-9+]/g, ''))) {
+                        alert('Format de numéro invalide. Utilisez: 623XXXXXXXX, 224623XXXXXXXX ou +224623XXXXXXXX');
+                        e.preventDefault();
+                        return false;
+                    }
+                }
+            });
+        }
+    });
+    </script>
+</body>
+</html>

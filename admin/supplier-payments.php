@@ -8,9 +8,93 @@ if (strlen($_SESSION['imsaid'] == 0)) {
   exit;
 }
 
+// =================================
+// 1) Calculer le solde de caisse actuel
+// =================================
+// 1.1 Ventes régulières du jour
+$sqlRegularSales = "
+  SELECT COALESCE(SUM(c.ProductQty * p.Price), 0) AS totalSales
+  FROM tblcart c
+  JOIN tblproducts p ON p.ID = c.ProductId
+  WHERE c.IsCheckOut = '1'
+    AND DATE(c.CartDate) = CURDATE()
+";
+$resRegularSales = mysqli_query($con, $sqlRegularSales);
+$rowRegularSales = mysqli_fetch_assoc($resRegularSales);
+$todayRegularSales = floatval($rowRegularSales['totalSales']);
+
+// 1.2 Paiements clients du jour - UPDATED to use tblpayments
+// 1.2.1 Tous les paiements clients (pour l'affichage)
+$sqlAllCustomerPayments = "
+  SELECT COALESCE(SUM(PaymentAmount), 0) AS totalPaid
+  FROM tblpayments
+  WHERE DATE(PaymentDate) = CURDATE()
+";
+$resAllCustomerPayments = mysqli_query($con, $sqlAllCustomerPayments);
+$rowAllCustomerPayments = mysqli_fetch_assoc($resAllCustomerPayments);
+$todayCustomerPaymentsAll = floatval($rowAllCustomerPayments['totalPaid']);
+
+// 1.2.2 Uniquement les paiements en espèces - NOUVEAU
+$sqlCashPayments = "
+  SELECT COALESCE(SUM(PaymentAmount), 0) AS totalPaid
+  FROM tblpayments
+  WHERE DATE(PaymentDate) = CURDATE()
+    AND PaymentMethod = 'Cash'
+";
+$resCashPayments = mysqli_query($con, $sqlCashPayments);
+$rowCashPayments = mysqli_fetch_assoc($resCashPayments);
+$todayCustomerPayments = floatval($rowCashPayments['totalPaid']);
+
+// 1.2.3 Paiements par méthode (pour l'affichage détaillé) - NOUVEAU
+$sqlPaymentMethods = "
+  SELECT 
+    PaymentMethod,
+    COUNT(*) as count,
+    SUM(PaymentAmount) as total
+  FROM tblpayments
+  WHERE DATE(PaymentDate) = CURDATE()
+  GROUP BY PaymentMethod
+";
+$resPaymentMethods = mysqli_query($con, $sqlPaymentMethods);
+$paymentsByMethod = [];
+while ($row = mysqli_fetch_assoc($resPaymentMethods)) {
+  $paymentsByMethod[$row['PaymentMethod']] = $row;
+}
+
+// 1.3 Dépôts et retraits manuels du jour
+$sqlManualTransactions = "
+  SELECT
+    COALESCE(SUM(CASE WHEN TransType='IN' THEN Amount ELSE 0 END), 0) AS deposits,
+    COALESCE(SUM(CASE WHEN TransType='OUT' THEN Amount ELSE 0 END), 0) AS withdrawals
+  FROM tblcashtransactions
+  WHERE DATE(TransDate) = CURDATE()
+";
+$resManualTransactions = mysqli_query($con, $sqlManualTransactions);
+$rowManualTransactions = mysqli_fetch_assoc($resManualTransactions);
+$todayDeposits = floatval($rowManualTransactions['deposits']);
+$todayWithdrawals = floatval($rowManualTransactions['withdrawals']);
+
+// 1.4 Retours du jour
+$sqlReturns = "
+  SELECT COALESCE(SUM(r.Quantity * p.Price), 0) AS totalReturns
+  FROM tblreturns r
+  JOIN tblproducts p ON p.ID = r.ProductID
+  WHERE DATE(r.ReturnDate) = CURDATE()
+";
+$resReturns = mysqli_query($con, $sqlReturns);
+$rowReturns = mysqli_fetch_assoc($resReturns);
+$todayReturns = floatval($rowReturns['totalReturns']);
+
+// 1.5 Calcul du solde disponible en caisse
+// UPDATED: N'utilise que les paiements en espèces dans le calcul du solde
+$availableCash = $todayDeposits + $todayRegularSales + $todayCustomerPayments - ($todayWithdrawals + $todayReturns);
+
 // ==========================
-// 1) Insertion d'un paiement
+// 2) Insertion d'un paiement fournisseur
 // ==========================
+$paymentError = '';
+$paymentSuccess = '';
+
 if (isset($_POST['submit'])) {
   $supplierID  = intval($_POST['supplierid']);
   $payDate     = $_POST['paydate'];
@@ -19,25 +103,76 @@ if (isset($_POST['submit'])) {
   $paymentMode = mysqli_real_escape_string($con, $_POST['paymentmode']);
 
   if ($supplierID <= 0 || $amount <= 0) {
-    echo "<script>alert('Données invalides');</script>";
-  } else {
-    $sql = "
-      INSERT INTO tblsupplierpayments(SupplierID, PaymentDate, Amount, Comments, PaymentMode)
-      VALUES('$supplierID', '$payDate', '$amount', '$comments', '$paymentMode')
-    ";
-    $res = mysqli_query($con, $sql);
-    if ($res) {
-      echo "<script>alert('Paiement enregistré !');</script>";
-    } else {
-      echo "<script>alert('Erreur lors de l\'insertion du paiement');</script>";
+    $paymentError = 'Données invalides';
+  } 
+  // Vérifier si le solde de caisse est suffisant
+  elseif ($amount > $availableCash) {
+    $paymentError = 'Solde en caisse insuffisant pour effectuer ce paiement !';
+  } 
+  else {
+    // 1) Débuter une transaction pour assurer la cohérence des données
+    mysqli_begin_transaction($con);
+    
+    try {
+      // 2) Enregistrer le paiement fournisseur
+      $sqlPayment = "
+        INSERT INTO tblsupplierpayments(SupplierID, PaymentDate, Amount, Comments, PaymentMode)
+        VALUES('$supplierID', '$payDate', '$amount', '$comments', '$paymentMode')
+      ";
+      $resPayment = mysqli_query($con, $sqlPayment);
+      
+      if (!$resPayment) {
+        throw new Exception("Erreur lors de l'insertion du paiement fournisseur");
+      }
+      
+      // 3) Récupérer le nom du fournisseur pour le commentaire de la transaction
+      $sqlSupplier = "SELECT SupplierName FROM tblsupplier WHERE ID = '$supplierID' LIMIT 1";
+      $resSupplier = mysqli_query($con, $sqlSupplier);
+      $rowSupplier = mysqli_fetch_assoc($resSupplier);
+      $supplierName = isset($rowSupplier['SupplierName']) ? $rowSupplier['SupplierName'] : 'Fournisseur #'.$supplierID;
+      
+      // 4) Calculer le nouveau solde de caisse
+      $newCashBalance = $availableCash - $amount;
+      
+      // 5) Enregistrer la transaction de caisse (OUT)
+      $cashComment = "Paiement fournisseur: " . $supplierName;
+      if (!empty($comments)) {
+        $cashComment .= " - " . $comments;
+      }
+      
+      $sqlCashTrans = "
+        INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
+        VALUES('$payDate', 'OUT', '$amount', '$newCashBalance', '$cashComment')
+      ";
+      $resCashTrans = mysqli_query($con, $sqlCashTrans);
+      
+      if (!$resCashTrans) {
+        throw new Exception("Erreur lors de l'enregistrement de la transaction en caisse");
+      }
+      
+      // 6) Tout s'est bien passé, on valide la transaction
+      mysqli_commit($con);
+      $paymentSuccess = 'Paiement enregistré et déduit de la caisse !';
+      
+      // Recalculer le solde disponible après le paiement
+      $availableCash = $newCashBalance;
+      
+    } catch (Exception $e) {
+      // Annuler toutes les modifications en cas d'erreur
+      mysqli_rollback($con);
+      $paymentError = $e->getMessage();
     }
   }
-  echo "<script>window.location.href='supplier-payments.php'</script>";
-  exit;
+  
+  if (!empty($paymentError)) {
+    echo "<script>alert('$paymentError');</script>";
+  } else if (!empty($paymentSuccess)) {
+    echo "<script>alert('$paymentSuccess');</script>";
+  }
 }
 
 // ==========================
-// 2) Filtre pour afficher le total pour un fournisseur
+// 3) Filtre pour afficher le total pour un fournisseur
 // ==========================
 $selectedSupplier = 0;
 $totalArrivals = 0;
@@ -72,9 +207,7 @@ if (isset($_GET['supplierSearch'])) {
     $totalDue = $totalArrivals - $totalPaid;
     if ($totalDue < 0) $totalDue = 0;
     
-    // ==========================
-    // NOUVEAU: Récupérer les détails des arrivages pour ce fournisseur
-    // ==========================
+    // Récupérer les détails des arrivages pour ce fournisseur
     $sqlArrivals = "
       SELECT 
         a.ID as arrivalID,
@@ -94,7 +227,7 @@ if (isset($_GET['supplierSearch'])) {
 }
 
 // ==========================
-// 3) Liste des paiements
+// 4) Liste des paiements
 // ==========================
 $sqlList = "
   SELECT sp.ID as paymentID,
@@ -141,6 +274,31 @@ $resList = mysqli_query($con, $sqlList);
     .supplier-details {
       margin-bottom: 25px;
     }
+    .cash-balance {
+      background-color: #dff0d8;
+      border: 1px solid #d6e9c6;
+      color: #3c763d;
+      padding: 15px;
+      margin-bottom: 20px;
+      border-radius: 4px;
+    }
+    .cash-balance.insufficient {
+      background-color: #f2dede;
+      border: 1px solid #ebccd1;
+      color: #a94442;
+    }
+    .cash-balance-amount {
+      font-size: 18px;
+      font-weight: bold;
+    }
+    .transaction-history {
+      margin-top: 10px;
+      font-size: 12px;
+    }
+    .not-in-cash {
+      color: #888;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -153,6 +311,52 @@ $resList = mysqli_query($con, $sqlList);
   </div>
   <div class="container-fluid">
     <hr>
+    
+    <!-- ========== AFFICHAGE DU SOLDE DE CAISSE ========== -->
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="cash-balance <?php echo ($availableCash <= 0) ? 'insufficient' : ''; ?>">
+          <div class="row-fluid">
+            <div class="span6">
+              <h4>Solde disponible en caisse:</h4>
+              <span class="cash-balance-amount"><?php echo number_format($availableCash, 2); ?></span>
+              <?php if ($availableCash <= 0): ?>
+                <p><strong>Attention:</strong> Solde insuffisant pour effectuer des paiements.</p>
+              <?php endif; ?>
+              
+              <?php if ($todayCustomerPaymentsAll > $todayCustomerPayments): ?>
+                <p class="not-in-cash">
+                  <i class="icon-info-sign"></i>
+                  <small>Note: Certains paiements clients (<?php echo number_format($todayCustomerPaymentsAll - $todayCustomerPayments, 2); ?>) 
+                  ont été effectués par d'autres moyens que les espèces et ne sont pas inclus dans le solde.</small>
+                </p>
+              <?php endif; ?>
+            </div>
+            <div class="span6">
+              <div class="transaction-history">
+                <p><strong>Détail du jour:</strong></p>
+                <ul>
+                  <li>Ventes régulières: +<?php echo number_format($todayRegularSales, 2); ?></li>
+                  <li>Paiements clients en espèces: +<?php echo number_format($todayCustomerPayments, 2); ?></li>
+                  <?php if (count($paymentsByMethod) > 0): ?>
+                    <li class="not-in-cash">Détail des paiements par méthode:
+                      <ul>
+                        <?php foreach ($paymentsByMethod as $method => $data): ?>
+                          <li><?php echo $method; ?>: <?php echo number_format($data['total'], 2); ?> (<?php echo $data['count']; ?> transaction(s))</li>
+                        <?php endforeach; ?>
+                      </ul>
+                    </li>
+                  <?php endif; ?>
+                  <li>Dépôts: +<?php echo number_format($todayDeposits, 2); ?></li>
+                  <li>Retraits: -<?php echo number_format($todayWithdrawals, 2); ?></li>
+                  <li>Retours: -<?php echo number_format($todayReturns, 2); ?></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- ========== FORMULAIRE pour voir combien on doit et a payé ========== -->
     <div class="row-fluid">
@@ -220,11 +424,27 @@ $resList = mysqli_query($con, $sqlList);
                 </div>
                 <div class="span4">
                   <p class="balance-due">Solde dû : <strong><?php echo number_format($totalDue, 2); ?></strong></p>
+                  
+                  <?php if ($totalDue > 0): ?>
+                    <?php if ($availableCash <= 0): ?>
+                      <div class="alert alert-error">
+                        <strong>Impossible de payer !</strong> Solde en caisse insuffisant.
+                      </div>
+                    <?php elseif ($availableCash < $totalDue): ?>
+                      <div class="alert alert-warning">
+                        <strong>Attention !</strong> Solde en caisse (<?php echo number_format($availableCash, 2); ?>) inférieur au montant dû.
+                      </div>
+                    <?php else: ?>
+                      <div class="alert alert-success">
+                        <strong>OK !</strong> Solde en caisse suffisant pour payer ce fournisseur.
+                      </div>
+                    <?php endif; ?>
+                  <?php endif; ?>
                 </div>
               </div>
             </div>
             
-            <!-- NOUVEAU: Affichage des détails d'arrivages pour ce fournisseur -->
+            <!-- Affichage des détails d'arrivages pour ce fournisseur -->
             <?php if (isset($resArrivals) && mysqli_num_rows($resArrivals) > 0): ?>
             <div class="widget-box">
               <div class="widget-title">
@@ -294,13 +514,14 @@ $resList = mysqli_query($con, $sqlList);
               <div class="control-group">
                 <label class="control-label">Fournisseur :</label>
                 <div class="controls">
-                  <select name="supplierid" required>
+                  <select name="supplierid" id="supplierid" required>
                     <option value="">-- Choisir --</option>
                     <?php
                     // Recharger la liste
                     $suppQ2 = mysqli_query($con, "SELECT ID, SupplierName FROM tblsupplier ORDER BY SupplierName ASC");
                     while ($rowS2 = mysqli_fetch_assoc($suppQ2)) {
-                      echo '<option value="'.$rowS2['ID'].'">'.$rowS2['SupplierName'].'</option>';
+                      $selected = ($rowS2['ID'] == $selectedSupplier) ? 'selected' : '';
+                      echo '<option value="'.$rowS2['ID'].'" '.$selected.'>'.$rowS2['SupplierName'].'</option>';
                     }
                     ?>
                   </select>
@@ -315,7 +536,15 @@ $resList = mysqli_query($con, $sqlList);
               <div class="control-group">
                 <label class="control-label">Montant :</label>
                 <div class="controls">
-                  <input type="number" name="amount" step="any" min="0" value="0" required />
+                  <input type="number" name="amount" id="amount" step="any" min="0.01" required />
+                  <?php if ($selectedSupplier > 0 && $totalDue > 0): ?>
+                    <span class="help-inline">
+                      <a href="#" onclick="setAmount(<?php echo $totalDue; ?>); return false;" class="btn btn-mini btn-info">Montant dû (<?php echo number_format($totalDue, 2); ?>)</a>
+                      <?php if ($availableCash > 0 && $availableCash < $totalDue): ?>
+                        <a href="#" onclick="setAmount(<?php echo $availableCash; ?>); return false;" class="btn btn-mini btn-warning">Solde disponible (<?php echo number_format($availableCash, 2); ?>)</a>
+                      <?php endif; ?>
+                    </span>
+                  <?php endif; ?>
                 </div>
               </div>
               <div class="control-group">
@@ -336,9 +565,12 @@ $resList = mysqli_query($con, $sqlList);
                 </div>
               </div>
               <div class="form-actions">
-                <button type="submit" name="submit" class="btn btn-success">
-                  <i class="icon-check"></i> Enregistrer
+                <button type="submit" name="submit" class="btn btn-success" <?php echo ($availableCash <= 0) ? 'disabled' : ''; ?>>
+                  <i class="icon-check"></i> Enregistrer et déduire de la caisse
                 </button>
+                <?php if ($availableCash <= 0): ?>
+                  <span class="help-inline text-error">Impossible d'effectuer des paiements: solde en caisse insuffisant</span>
+                <?php endif; ?>
               </div>
             </form>
           </div><!-- widget-content nopadding -->
@@ -357,7 +589,7 @@ $resList = mysqli_query($con, $sqlList);
             <h5>Liste des Paiements</h5>
           </div>
           <div class="widget-content nopadding">
-            <table class="table table-bordered data-table">
+            <table class="table table-bordered">
               <thead>
                 <tr>
                   <th>#</th>
@@ -408,5 +640,38 @@ $resList = mysqli_query($con, $sqlList);
 <script src="js/bootstrap.min.js"></script>
 <script src="js/jquery.dataTables.min.js"></script>
 <script src="js/matrix.tables.js"></script>
+<script>
+// Fonction pour définir le montant
+function setAmount(amount) {
+  document.getElementById('amount').value = amount;
+}
+
+// Validation du formulaire
+$(document).ready(function() {
+  $('form').on('submit', function(e) {
+    var amount = parseFloat($('#amount').val()) || 0;
+    var availableCash = <?php echo $availableCash; ?>;
+    
+    if (amount <= 0) {
+      alert('Veuillez saisir un montant valide (supérieur à 0)');
+      e.preventDefault();
+      return false;
+    }
+    
+    if (amount > availableCash) {
+      alert('Le montant saisi (' + amount.toFixed(2) + ') est supérieur au solde disponible en caisse (' + availableCash.toFixed(2) + ')');
+      e.preventDefault();
+      return false;
+    }
+    
+    return true;
+  });
+  
+  // Auto-sélectionner le fournisseur si passé en paramètre
+  <?php if ($selectedSupplier > 0): ?>
+  $('#supplierid').val(<?php echo $selectedSupplier; ?>);
+  <?php endif; ?>
+});
+</script>
 </body>
 </html>

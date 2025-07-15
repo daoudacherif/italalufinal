@@ -42,6 +42,112 @@ if (strlen($_SESSION['imsaid']==0)) {
   .print-header {
     display: none;
   }
+  .company-header {
+    text-align: center;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #333;
+    padding-bottom: 15px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  
+  /* Styles pour le logo */
+  .company-logo {
+    margin-bottom: 15px;
+  }
+  .company-logo img {
+    max-width: 120px;
+    max-height: 80px;
+    object-fit: contain;
+  }
+  
+  /* Alternative: Logo et texte côte à côte */
+  .company-header-horizontal {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    text-align: left;
+  }
+  .company-header-horizontal .company-logo {
+    margin-bottom: 0;
+    margin-right: 20px;
+  }
+  .company-header-horizontal .company-info {
+    flex: 1;
+  }
+  
+  .company-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+  }
+  .company-subtitle {
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+  .company-contact {
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .company-contact .left-info {
+    text-align: left;
+    flex: 1;
+  }
+  .company-contact .right-info {
+    background-color: #333;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 3px;
+  }
+  .invoice-footer {
+    text-align: center;
+    margin-top: 30px;
+    padding-top: 15px;
+    border-top: 1px solid #ddd;
+    font-size: 12px;
+    color: #666;
+  }
+
+  /* Styles pour les signatures */
+  .signature-section {
+    margin-top: 40px;
+    margin-bottom: 30px;
+    padding: 20px 0;
+    border-top: 1px solid #ddd;
+  }
+  
+  /* Conteneur pour l'affichage horizontal des signatures */
+  .signature-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+  }
+  
+  .signature-box {
+    text-align: center;
+    padding: 15px;
+    flex: 1;
+    margin: 0 10px;
+  }
+  
+  .signature-label {
+    font-weight: bold;
+    font-size: 14px;
+    margin-bottom: 30px;
+    color: #333;
+  }
+  
+  .signature-date {
+    font-size: 12px;
+    color: #666;
+    margin-top: 10px;
+  }
   
   /* Styles spécifiques pour l'impression */
   @media print {
@@ -98,6 +204,14 @@ if (strlen($_SESSION['imsaid']==0)) {
       background: none !important;
     }
     
+    /* S'assurer que le logo s'imprime correctement */
+    .company-logo img {
+      max-width: 100px !important;
+      max-height: 70px !important;
+      print-color-adjust: exact;
+      -webkit-print-color-adjust: exact;
+    }
+    
     /* Assurer que les tableaux s'impriment correctement */
     table { page-break-inside: auto; }
     tr { page-break-inside: avoid; page-break-after: auto; }
@@ -122,6 +236,11 @@ if (strlen($_SESSION['imsaid']==0)) {
       color: #d9534f !important;
     }
     
+    .company-contact .right-info {
+      background-color: #333 !important;
+      color: white !important;
+    }
+    
     /* Assurer que les liens sont visibles et sans URL */
     a, a:visited {
       text-decoration: underline;
@@ -133,6 +252,37 @@ if (strlen($_SESSION['imsaid']==0)) {
     /* Masquer le bouton d'impression */
     input[name="printbutton"] {
       display: none !important;
+    }
+    
+    /* Styles d'impression pour les signatures */
+    .signature-section {
+      margin-top: 30px !important;
+      margin-bottom: 20px !important;
+      padding: 15px 0 !important;
+      border-top: 2px solid #000 !important;
+      page-break-inside: avoid;
+    }
+    
+    .signature-container {
+      display: flex !important;
+      justify-content: space-between !important;
+    }
+    
+    .signature-box {
+      padding: 10px !important;
+      flex: 1 !important;
+    }
+    
+    .signature-label {
+      color: black !important;
+      font-weight: bold !important;
+      font-size: 12px !important;
+      margin-bottom: 20px !important;
+    }
+    
+    .signature-date {
+      color: black !important;
+      font-size: 10px !important;
     }
   }
 </style>
@@ -155,10 +305,25 @@ if (strlen($_SESSION['imsaid']==0)) {
     <hr class="no-print">
     <div class="row-fluid">
       <div class="span12" id="printArea">
-        <!-- En-tête qui n'apparaît qu'à l'impression -->
-        <div class="print-header">
-          <h2>Système de Gestion d'Inventaire</h2>
-          <p>Facture #<?php echo $_SESSION['invoiceid']; ?></p>
+        <!-- En-tête de l'entreprise avec logo -->
+        <div class="company-header">
+          <!-- Logo de l'entreprise -->
+          <div class="company-logo">
+        <img src="includes/img/logo.jpg" alt="Logo de l'entreprise" />
+          </div>
+          
+          <!-- Informations de l'entreprise -->
+          <div class="company-info">
+            <div class="company-title">VENTE DE MATERIEL DE CONSTRUCTION</div>
+            <div class="company-subtitle">Pointes, Contre plaque, Brouette, Fil d'attache, Peinture, et Divers</div>
+            <div class="company-contact">
+              <div class="left-info">
+                Sis à Bailobaya à côté du marché<br>
+                Tél 621 59 87 80 / 621 72 36 46
+              </div>
+              <div class="right-info">C Plaque</div>
+            </div>
+          </div>
         </div>
         
         <div class="invoice-box">
@@ -271,6 +436,29 @@ if (strlen($_SESSION['imsaid']==0)) {
               </div>
             </div>
           </div>
+        </div>
+        
+        <!-- Section des signatures -->
+        <div class="signature-section">
+          <div class="signature-container">
+            <div class="signature-box">
+              <p class="signature-label">Signature du Vendeur:</p>
+              <p class="signature-date">Date: <?php echo date("d/m/Y"); ?></p>
+            </div>
+            <div class="signature-box">
+              <p class="signature-label">Signature du Client:</p>
+              <p class="signature-date">Date: <?php echo date("d/m/Y"); ?></p>
+            </div>
+            <div class="signature-box">
+              <p class="signature-label">Signature du Chauffeur:</p>
+              <p class="signature-date">Date: <?php echo date("d/m/Y"); ?></p>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Pied de page avec RCCM -->
+        <div class="invoice-footer">
+          <strong>RCCM GN.TCC.2023.A.14202</strong>
         </div>
         
         <!-- Bouton d'impression - caché à l'impression -->

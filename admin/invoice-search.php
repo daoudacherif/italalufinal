@@ -43,6 +43,54 @@ if (strlen($_SESSION['imsaid']==0)) {
     display: none;
   }
   
+  /* Styles pour le logo et en-tête de l'entreprise */
+  .company-header {
+    text-align: center;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #333;
+    padding-bottom: 15px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  
+  .company-logo {
+    margin-bottom: 15px;
+  }
+  .company-logo img {
+    max-width: 120px;
+    max-height: 80px;
+    object-fit: contain;
+  }
+  
+  .company-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+  }
+  .company-subtitle {
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+  .company-contact {
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .company-contact .left-info {
+    text-align: left;
+    flex: 1;
+  }
+  .company-contact .right-info {
+    background-color: #333;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 3px;
+  }
+  
   /* Styles pour les factures à terme */
   .credit-badge {
     display: inline-block;
@@ -66,6 +114,49 @@ if (strlen($_SESSION['imsaid']==0)) {
   .payment-label {
     font-weight: bold;
     color: #856404;
+  }
+
+  /* Styles pour les signatures */
+  .signature-section {
+    margin-top: 40px;
+    margin-bottom: 30px;
+    padding: 20px 0;
+    border-top: 1px solid #ddd;
+  }
+  
+  .signature-box {
+    text-align: center;
+    padding: 15px;
+    margin: 0 5px;
+  }
+  
+  .signature-label {
+    font-weight: bold;
+    font-size: 14px;
+    margin-bottom: 15px;
+    color: #333;
+  }
+  
+  .signature-line {
+    border-bottom: 2px solid #333;
+    height: 50px;
+    margin-bottom: 10px;
+    position: relative;
+  }
+  
+  .signature-date {
+    font-size: 12px;
+    color: #666;
+    margin-top: 10px;
+  }
+
+  .invoice-footer {
+    text-align: center;
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #ddd;
+    font-size: 12px;
+    color: #666;
   }
   
   /* Styles spécifiques pour l'impression */
@@ -122,6 +213,14 @@ if (strlen($_SESSION['imsaid']==0)) {
       padding: 0 !important;
       background: none !important;
     }
+
+    /* S'assurer que le logo s'imprime correctement */
+    .company-logo img {
+      max-width: 100px !important;
+      max-height: 70px !important;
+      print-color-adjust: exact;
+      -webkit-print-color-adjust: exact;
+    }
     
     /* Assurer que les tableaux s'impriment correctement */
     table { page-break-inside: auto; }
@@ -146,6 +245,11 @@ if (strlen($_SESSION['imsaid']==0)) {
     .invoice-total {
       color: #d9534f !important;
     }
+
+    .company-contact .right-info {
+      background-color: #333 !important;
+      color: white !important;
+    }
     
     /* Assurer que les liens sont visibles et sans URL */
     a, a:visited {
@@ -168,6 +272,35 @@ if (strlen($_SESSION['imsaid']==0)) {
     
     .payment-label {
       color: #000 !important;
+    }
+
+    /* Styles d'impression pour les signatures */
+    .signature-section {
+      margin-top: 30px !important;
+      margin-bottom: 20px !important;
+      padding: 15px 0 !important;
+      border-top: 2px solid #000 !important;
+      page-break-inside: avoid;
+    }
+    
+    .signature-box {
+      padding: 10px !important;
+    }
+    
+    .signature-label {
+      color: black !important;
+      font-weight: bold !important;
+      font-size: 12px !important;
+    }
+    
+    .signature-line {
+      border-bottom: 2px solid #000 !important;
+      height: 40px !important;
+    }
+    
+    .signature-date {
+      color: black !important;
+      font-size: 10px !important;
     }
   }
 </style>
@@ -273,10 +406,25 @@ if (strlen($_SESSION['imsaid']==0)) {
           $useTable = ($creditItems > 0) ? 'tblcreditcart' : 'tblcart';
         ?>
         <div id="printArea">
-          <!-- En-tête qui n'apparaît qu'à l'impression -->
-          <div class="print-header">
-            <h2>Système de Gestion d'Inventaire</h2>
-            <p>Facture #<?php echo htmlspecialchars($invoiceid); ?></p>
+          <!-- En-tête de l'entreprise avec logo -->
+          <div class="company-header">
+            <!-- Logo de l'entreprise -->
+            <div class="company-logo">
+          <img src="includes/img/logo.jpg" alt="Logo de l'entreprise" />
+            </div>
+            
+            <!-- Informations de l'entreprise -->
+            <div class="company-info">
+              <div class="company-title">VENTE DE MATERIEL DE CONSTRUCTION</div>
+              <div class="company-subtitle">Pointes, Contre plaque, Brouette, Fil d'attache, Peinture, et Divers</div>
+              <div class="company-contact">
+                <div class="left-info">
+                  Sis à Bailobaya à côté du marché<br>
+                  Tél 621 59 87 80 / 621 72 36 46
+                </div>
+                <div class="right-info">C Plaque</div>
+              </div>
+            </div>
           </div>
           
           <div class="invoice-box">
@@ -292,8 +440,8 @@ if (strlen($_SESSION['imsaid']==0)) {
                   <p>Date: <?php echo $formattedDate; ?></p>
                 </div>
                 <div class="span6 text-right">
-                  <h4><?php echo htmlspecialchars($_SERVER['HTTP_HOST']); ?></h4>
-                  <p>Système de Gestion d'Inventaire</p>
+                  <h4>Système de Gestion d'Inventaire</h4>
+                  <p>Facture Recherchée</p>
                 </div>
               </div>
             </div>
@@ -420,14 +568,46 @@ if (strlen($_SESSION['imsaid']==0)) {
                 <p><small>Cette facture a été générée automatiquement par le système.</small></p>
               </div>
             </div>
-            
-            <!-- Bouton d'impression - caché à l'impression -->
-            <div class="row-fluid no-print" style="margin-top: 20px;">
-              <div class="span12 text-center">
-                <button class="btn btn-primary" onclick="window.print();">
-                  <i class="icon-print"></i> Imprimer Facture
-                </button>
+          </div>
+
+          <!-- Section des signatures -->
+          <div class="signature-section">
+            <div class="row-fluid">
+              <div class="span4">
+                <div class="signature-box">
+                  <p class="signature-label">Signature du Vendeur:</p>
+                  <div class="signature-line"></div>
+                  <p class="signature-date">Date: <?php echo date("d/m/Y"); ?></p>
+                </div>
               </div>
+              <div class="span4">
+                <div class="signature-box">
+                  <p class="signature-label">Signature du Client:</p>
+                  <div class="signature-line"></div>
+                  <p class="signature-date">Date: <?php echo date("d/m/Y"); ?></p>
+                </div>
+              </div>
+              <div class="span4">
+                <div class="signature-box">
+                  <p class="signature-label">Signature du Chauffeur:</p>
+                  <div class="signature-line"></div>
+                  <p class="signature-date">Date: <?php echo date("d/m/Y"); ?></p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pied de page avec RCCM -->
+          <div class="invoice-footer">
+            <strong>RCCM GN.TCC.2023.A.14202</strong>
+          </div>
+            
+          <!-- Bouton d'impression - caché à l'impression -->
+          <div class="row-fluid no-print" style="margin-top: 20px;">
+            <div class="span12 text-center">
+              <button class="btn btn-primary" onclick="window.print();">
+                <i class="icon-print"></i> Imprimer Facture
+              </button>
             </div>
           </div>
         </div>

@@ -56,6 +56,7 @@ try {
         <li><a href="add-product.php">Ajouter un Article</a></li>
         <li><a href="manage-product.php">Gérer les Articles</a></li>
         <li><a href="inventory.php">Inventaire</a></li>
+
       </ul>
     </li>
     <?php endif; ?>
@@ -65,12 +66,15 @@ try {
     <li class="submenu">
       <a href="#"><i class="icon-shopping-cart"></i> <span>Ventes</span></a>
       <ul>
-        <li><a href="cart.php">Comptant <span class="label label-important"><?php echo htmlentities($cartcountcount);?></span></a></li>
-        <li><a href="dettecart.php">Terme <span class="label label-important"><?php echo htmlentities($cartcountcount);?></span></a></li>
+        <li><a href="cart.php">Comptant <span class="label label-important"></span></a></li>
+        <li><a href="quick_sales.php">vente rapide <span class="label label-important"></span></a></li>
+        <li><a href="dettecart.php">Terme <span class="label label-important"></span></a></li>
         <li><a href="return.php">Retour</a></li>
         <li><a href="transact.php">Transactions</a></li>
+         <?php if($username != 'saler'): ?>
         <li><a href="facture.php">Factures</a></li>
         <li><a href="admin_invoices.php">Factures par Admin</a></li>
+        <?php endif; ?>
       </ul>
     </li>
 
@@ -112,6 +116,7 @@ try {
         <li><a href="stock-report.php">Stock</a></li>
         <li><a href="sales-report.php">Ventes</a></li>
         <li><a href="daily-repport.php">Journalier</a></li>
+        
       </ul>
     </li>
    

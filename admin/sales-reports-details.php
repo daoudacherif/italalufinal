@@ -5,352 +5,543 @@ include('includes/dbconnection.php');
 if (strlen($_SESSION['imsaid']==0)) {
   header('location:logout.php');
 } else {
+
+// Récupérer les paramètres
+$fdate = $_POST['fromdate'] ?? date('Y-m-01'); // Premier jour du mois par défaut
+$tdate = $_POST['todate'] ?? date('Y-m-d');    // Aujourd'hui par défaut
+$rtype = $_POST['requesttype'] ?? 'detailed';
+
+// Calculer la période précédente pour comparaison
+$days_diff = (strtotime($tdate) - strtotime($fdate)) / (60 * 60 * 24);
+$previous_start = date('Y-m-d', strtotime($fdate . " -" . ($days_diff + 1) . " days"));
+$previous_end = date('Y-m-d', strtotime($fdate . " -1 day"));
+
 ?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<title>Système de gestion d'inventaire || Détails du rapport de ventes</title>
+<title>Système de gestion d'inventaire || Rapport de ventes détaillé</title>
 <?php include_once('includes/cs.php');?>
 <?php include_once('includes/responsive.php'); ?>
 <style>
-  /* Styles pour l'interface normale */
-  .report-box {
-    background-color: #f9f9f9;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 15px;
+  .stats-box {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px;
+    border-radius: 8px;
     margin-bottom: 20px;
-  }
-  .report-header {
-    border-bottom: 1px solid #eee;
-    padding-bottom: 10px;
-    margin-bottom: 15px;
-  }
-  .report-total {
-    font-weight: bold;
-    color: #d9534f;
-  }
-  .print-header {
-    display: none;
+    text-align: center;
   }
   
-  /* Styles spécifiques pour l'impression */
-  @media print {
-    /* Cacher tous les éléments de navigation et UI */
-    header, #header, .header, 
-    #sidebar, .sidebar, 
-    #user-nav, #search, .navbar, 
-    footer, #footer, .footer,
-    .no-print, #breadcrumb, 
-    #content-header, .widget-title {
-      display: none !important;
-    }
-    
-    /* Afficher l'en-tête d'impression qui est normalement caché */
-    .print-header {
-      display: block;
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    
-    /* Ajuster la mise en page pour l'impression */
-    body {
-      background: white !important;
-      margin: 0 !important;
-      padding: 0 !important;
-    }
-    
-    #content {
-      margin: 0 !important;
-      padding: 0 !important;
-      width: 100% !important;
-      left: 0 !important;
-      position: relative !important;
-    }
-    
-    .container-fluid {
-      padding: 0 !important;
-      margin: 0 !important;
-      width: 100% !important;
-    }
-    
-    .row-fluid .span12 {
-      width: 100% !important;
-      margin: 0 !important;
-      float: none !important;
-    }
-    
-    /* Retirer les bordures et couleurs de fond pour l'impression */
-    .widget-box {
-      border: none !important;
-      box-shadow: none !important;
-      margin: 0 !important;
-      padding: 0 !important;
-      background: none !important;
-    }
-    
-    /* Assurer que les tableaux s'impriment correctement */
-    table { page-break-inside: auto; }
-    tr { page-break-inside: avoid; page-break-after: auto; }
-    thead { display: table-header-group; }
-    tfoot { display: table-footer-group; }
-    
-    /* Supprimer les marges et espacements inutiles */
-    hr, br.print-hidden {
-      display: none !important;
-    }
-    
-    /* Forcer l'impression en noir et blanc par défaut */
-    * {
-      color: black !important;
-      text-shadow: none !important;
-      filter: none !important;
-      -ms-filter: none !important;
-    }
-    
-    /* Sauf pour certains éléments spécifiques */
-    .report-total {
-      color: #d9534f !important;
-    }
-    
-    /* Assurer que les liens sont visibles et sans URL */
-    a, a:visited {
-      text-decoration: underline;
-    }
-    a[href]:after {
-      content: "";
-    }
-    
-    /* Masquer le bouton d'impression */
-    .btn-print, .no-print {
-      display: none !important;
-    }
+  .stats-box h3 {
+    margin: 0;
+    font-size: 2.5em;
+    font-weight: bold;
   }
+  
+  .stats-box p {
+    margin: 5px 0 0 0;
+    opacity: 0.9;
+  }
+  
+  .comparison {
+    font-size: 0.9em;
+    margin-top: 10px;
+  }
+  
+  .positive { color: #2ecc71; }
+  .negative { color: #e74c3c; }
+  
+  .chart-container {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+  
+  .product-rank {
+    display: inline-block;
+    background: #f39c12;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: bold;
+  }
+  
+  .customer-badge {
+    background: #3498db;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+  
+  @media print {
+    .no-print { display: none !important; }
+    .print-header { display: block; text-align: center; margin-bottom: 20px; }
+    body { background: white !important; }
+    .stats-box { background: #f8f9fa !important; color: black !important; }
+  }
+  
+  .print-header { display: none; }
 </style>
 </head>
 <body>
-<!-- Éléments qui seront cachés à l'impression -->
 <div class="no-print">
   <?php include_once('includes/header.php');?>
   <?php include_once('includes/sidebar.php');?>
 </div>
 
 <div id="content">
-  <!-- En-tête de contenu - caché à l'impression -->
   <div id="content-header" class="no-print">
-    <div id="breadcrumb"> <a href="dashboard.php" title="Aller à l'accueil" class="tip-bottom"><i class="icon-home"></i> Accueil</a> <a href="sales-report.php" class="current">Détails du rapport de ventes</a> </div>
-    <h1>Détails du rapport de ventes</h1>
+    <div id="breadcrumb">
+      <a href="dashboard.php" title="Aller à l'accueil" class="tip-bottom"><i class="icon-home"></i> Accueil</a>
+      <a href="sales-report.php">Rapport de ventes</a>
+      <a href="#" class="current">Analyse détaillée</a>
+    </div>
+    <h1>Rapport de ventes détaillé</h1>
   </div>
   
   <div class="container-fluid">
     <hr class="no-print">
+    
+    <!-- Période sélectionnée -->
+    <div class="row-fluid no-print">
+      <div class="span12">
+        <div style="background: #ecf0f1; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+          <h4 style="margin: 0;">
+            📊 Période analysée : 
+            <strong><?php echo date('d/m/Y', strtotime($fdate)); ?></strong> 
+            au 
+            <strong><?php echo date('d/m/Y', strtotime($tdate)); ?></strong>
+            (<?php echo ($days_diff + 1); ?> jours)
+          </h4>
+        </div>
+      </div>
+    </div>
+
+    <?php
+    // ================================
+    // 1. STATISTIQUES GÉNÉRALES (avec remises)
+    // ================================
+    
+    // Ventes période actuelle (CORRIGÉ - avec remises)
+    $sql_current_sales = "
+      SELECT 
+        COUNT(DISTINCT cust.BillingNumber) as total_orders,
+        COUNT(DISTINCT cust.ID) as unique_customers,
+        SUM(cust.FinalAmount) as total_revenue,
+        AVG(cust.FinalAmount) as avg_order_value,
+        SUM(CASE WHEN cust.ModeofPayment = 'credit' THEN cust.FinalAmount ELSE 0 END) as credit_sales,
+        SUM(CASE WHEN cust.ModeofPayment != 'credit' THEN cust.FinalAmount ELSE 0 END) as cash_sales
+      FROM tblcustomer cust
+      JOIN tblcart c ON c.BillingId = cust.BillingNumber
+      WHERE DATE(c.CartDate) BETWEEN '$fdate' AND '$tdate'
+        AND c.IsCheckOut = '1'
+    ";
+    $res_current = mysqli_query($con, $sql_current_sales);
+    $current_stats = mysqli_fetch_assoc($res_current);
+    
+    // Ventes période précédente pour comparaison
+    $sql_previous_sales = "
+      SELECT 
+        COUNT(DISTINCT cust.BillingNumber) as total_orders,
+        SUM(cust.FinalAmount) as total_revenue,
+        AVG(cust.FinalAmount) as avg_order_value
+      FROM tblcustomer cust
+      JOIN tblcart c ON c.BillingId = cust.BillingNumber
+      WHERE DATE(c.CartDate) BETWEEN '$previous_start' AND '$previous_end'
+        AND c.IsCheckOut = '1'
+    ";
+    $res_previous = mysqli_query($con, $sql_previous_sales);
+    $previous_stats = mysqli_fetch_assoc($res_previous);
+    
+    // Calculs des variations
+    $revenue_change = $previous_stats['total_revenue'] > 0 ? 
+      (($current_stats['total_revenue'] - $previous_stats['total_revenue']) / $previous_stats['total_revenue']) * 100 : 0;
+    $orders_change = $previous_stats['total_orders'] > 0 ? 
+      (($current_stats['total_orders'] - $previous_stats['total_orders']) / $previous_stats['total_orders']) * 100 : 0;
+    ?>
+
+    <!-- Statistiques principales -->
     <div class="row-fluid">
-      <div class="span12" id="printArea">
-        <!-- En-tête qui n'apparaît qu'à l'impression -->
-        <div class="print-header">
-          <h2>Système de Gestion d'Inventaire</h2>
-          <p>Rapport de ventes</p>
-        </div>
-        
-        <div class="report-box">
-          <?php
-            $fdate = $_POST['fromdate'];
-            $tdate = $_POST['todate'];
-            $rtype = $_POST['requesttype'];
-          ?>
-          
-          <?php if($rtype=='mtwise'){ 
-            $month1 = strtotime($fdate);
-            $month2 = strtotime($tdate);
-            $m1 = date("F", $month1);
-            $m2 = date("F", $month2);
-            $y1 = date("Y", $month1);
-            $y2 = date("Y", $month2);
-          ?>
-          
-          <div class="report-header">
-            <h3>Rapport de ventes de <?php echo $m1."-".$y1;?> à <?php echo $m2."-".$y2;?></h3>
-          </div>
-          
-          <div class="widget-content">
-            <table class="table table-bordered table-striped">
-              <thead>
-                <tr>
-                  <th width="5%">N°</th>
-                  <th width="15%">Mois / Année</th>
-                  <th width="30%">Nom du produit</th>
-                  <th width="15%">Numéro de modèle</th>
-                  <th width="10%">Quantité vendue</th>
-                  <th width="10%">Prix unitaire</th>
-                  <th width="15%">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php
-                $ret = mysqli_query($con, "SELECT 
-                                        month(tblcart.CartDate) as lmonth,
-                                        year(tblcart.CartDate) as lyear,
-                                        tblproducts.ProductName,
-                                        tblproducts.Price,
-                                        tblproducts.ModelNumber,
-                                        sum(tblcart.ProductQty) as selledqty 
-                                    FROM 
-                                        tblproducts 
-                                    LEFT JOIN 
-                                        tblcart ON tblproducts.ID=tblcart.ProductId 
-                                    WHERE 
-                                        date(tblcart.CartDate) BETWEEN '$fdate' AND '$tdate' 
-                                    GROUP BY 
-                                        lmonth, lyear, tblproducts.ProductName");
-                
-                $num = mysqli_num_rows($ret);
-                if($num > 0) {
-                    $cnt = 1;
-                    $gtotal = 0;
-                    
-                    while ($row = mysqli_fetch_array($ret)) {
-                        $qty = $row['selledqty'];
-                        $ppunit = $row['Price'];
-                        $total = $qty * $ppunit;
-                        $gtotal += $total;
-                ?>
-                <tr>
-                  <td><?php echo $cnt; ?></td>
-                  <td><?php echo $row['lmonth']."/".$row['lyear']; ?></td>
-                  <td><?php echo htmlspecialchars($row['ProductName']); ?></td>
-                  <td><?php echo htmlspecialchars($row['ModelNumber']); ?></td>
-                  <td><?php echo $qty; ?></td>
-                  <td><?php echo number_format($ppunit, 2); ?></td>
-                  <td><?php echo number_format($total, 2); ?></td>
-                </tr>
-                <?php 
-                        $cnt++;
-                    }
-                ?>
-                <tr>
-                  <th colspan="6" style="text-align: right; color: #d9534f; font-weight: bold; font-size: 15px" class="report-total">Total général</th>  
-                  <th style="text-align: center; color: #d9534f; font-weight: bold; font-size: 15px" class="report-total"><?php echo number_format($gtotal, 2); ?></th>  
-                </tr>
-                <?php } else { ?>
-                <tr>
-                  <td colspan="7" class="text-center">Aucune donnée trouvée pour cette période</td>
-                </tr>
-                <?php } ?>
-              </tbody>
-            </table>
-          </div>
-          
-          <?php } else { 
-            $year1 = strtotime($fdate);
-            $year2 = strtotime($tdate);
-            $y1 = date("Y", $year1);
-            $y2 = date("Y", $year2);
-          ?>
-          
-          <div class="report-header">
-            <h3>Rapport de ventes de l'année <?php echo $y1; ?> à l'année <?php echo $y2; ?></h3>
-          </div>
-          
-          <div class="widget-content">
-            <table class="table table-bordered table-striped">
-              <thead>
-                <tr>
-                  <th width="5%">N°</th>
-                  <th width="10%">Année</th>
-                  <th width="35%">Nom du produit</th>
-                  <th width="15%">Numéro de modèle</th>
-                  <th width="10%">Quantité vendue</th>
-                  <th width="10%">Prix unitaire</th>
-                  <th width="15%">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php
-                $ret = mysqli_query($con, "SELECT 
-                                        year(tblcart.CartDate) as lyear,
-                                        tblproducts.ProductName,
-                                        tblproducts.Price,
-                                        tblproducts.ModelNumber,
-                                        sum(tblcart.ProductQty) as selledqty 
-                                    FROM 
-                                        tblproducts 
-                                    LEFT JOIN 
-                                        tblcart ON tblproducts.ID=tblcart.ProductId 
-                                    WHERE 
-                                        date(tblcart.CartDate) BETWEEN '$fdate' AND '$tdate' 
-                                    GROUP BY 
-                                        lyear, tblproducts.ProductName");
-                
-                $num = mysqli_num_rows($ret);
-                if($num > 0) {
-                    $cnt = 1;
-                    $gtotal = 0;
-                    
-                    while ($row = mysqli_fetch_array($ret)) {
-                        $qty = $row['selledqty'];
-                        $ppunit = $row['Price'];
-                        $total = $qty * $ppunit;
-                        $gtotal += $total;
-                ?>
-                <tr>
-                  <td><?php echo $cnt; ?></td>
-                  <td><?php echo $row['lyear']; ?></td>
-                  <td><?php echo htmlspecialchars($row['ProductName']); ?></td>
-                  <td><?php echo htmlspecialchars($row['ModelNumber']); ?></td>
-                  <td><?php echo $qty; ?></td>
-                  <td><?php echo number_format($ppunit, 2); ?></td>
-                  <td><?php echo number_format($total, 2); ?></td>
-                </tr>
-                <?php 
-                        $cnt++;
-                    }
-                ?>
-                <tr>
-                  <th colspan="6" style="text-align: right; color: #d9534f; font-weight: bold; font-size: 15px" class="report-total">Total général</th>  
-                  <th style="text-align: center; color: #d9534f; font-weight: bold; font-size: 15px" class="report-total"><?php echo number_format($gtotal, 2); ?></th>  
-                </tr>
-                <?php } else { ?>
-                <tr>
-                  <td colspan="7" class="text-center">Aucune donnée trouvée pour cette période</td>
-                </tr>
-                <?php } ?>
-              </tbody>
-            </table>
-          </div>
-          <?php } ?>
-          
-          <!-- Pied de page du rapport -->
-          <div class="row-fluid">
-            <div class="span12">
-              <p style="margin-top: 20px;"><small>Rapport généré le <?php echo date("d/m/Y H:i"); ?></small></p>
-            </div>
+      <div class="span3">
+        <div class="stats-box">
+          <h3><?php echo number_format($current_stats['total_revenue'], 0); ?></h3>
+          <p>Chiffre d'affaires total</p>
+          <div class="comparison">
+            <?php if($revenue_change > 0): ?>
+              <span class="positive">↗ +<?php echo number_format($revenue_change, 1); ?>%</span>
+            <?php elseif($revenue_change < 0): ?>
+              <span class="negative">↘ <?php echo number_format($revenue_change, 1); ?>%</span>
+            <?php else: ?>
+              <span>Pas de comparaison</span>
+            <?php endif; ?>
           </div>
         </div>
-        
-        <!-- Boutons d'impression - cachés à l'impression -->
-        <div class="row-fluid no-print" style="margin-top: 20px;">
-          <div class="span12 text-center">
-            <button class="btn btn-primary btn-print" onclick="window.print();">
-              <i class="icon-print"></i> Imprimer le rapport
-            </button>
-            <a href="sales-report.php" class="btn">
-              <i class="icon-arrow-left"></i> Retour
-            </a>
+      </div>
+      
+      <div class="span3">
+        <div class="stats-box">
+          <h3><?php echo $current_stats['total_orders']; ?></h3>
+          <p>Commandes réalisées</p>
+          <div class="comparison">
+            <?php if($orders_change > 0): ?>
+              <span class="positive">↗ +<?php echo number_format($orders_change, 1); ?>%</span>
+            <?php elseif($orders_change < 0): ?>
+              <span class="negative">↘ <?php echo number_format($orders_change, 1); ?>%</span>
+            <?php else: ?>
+              <span>Pas de comparaison</span>
+            <?php endif; ?>
+          </div>
+        </div>
+      </div>
+      
+      <div class="span3">
+        <div class="stats-box">
+          <h3><?php echo number_format($current_stats['avg_order_value'], 0); ?></h3>
+          <p>Panier moyen</p>
+          <div class="comparison">
+            <small>Clients uniques: <?php echo $current_stats['unique_customers']; ?></small>
+          </div>
+        </div>
+      </div>
+      
+      <div class="span3">
+        <div class="stats-box">
+          <h3><?php echo number_format(($current_stats['cash_sales'] / $current_stats['total_revenue']) * 100, 1); ?>%</h3>
+          <p>Ventes au comptant</p>
+          <div class="comparison">
+            <small>Crédit: <?php echo number_format($current_stats['credit_sales'], 0); ?></small>
           </div>
         </div>
       </div>
     </div>
+
+    <?php
+    // ================================
+    // 2. TOP PRODUITS VENDUS (avec remises)
+    // ================================
+    $sql_top_products = "
+      SELECT 
+        p.ProductName,
+        p.ModelNumber,
+        cat.CategoryName,
+        SUM(cart.ProductQty) as total_qty,
+        COUNT(DISTINCT cust.BillingNumber) as times_sold,
+        SUM(cart.ProductQty * cart.Price) as gross_revenue,
+        SUM((cart.ProductQty * cart.Price) * (cust.FinalAmount / (
+          SELECT SUM(c2.ProductQty * c2.Price) 
+          FROM tblcart c2 
+          WHERE c2.BillingId = cust.BillingNumber
+        ))) as net_revenue
+      FROM tblproducts p
+      JOIN tblcart cart ON p.ID = cart.ProductId
+      JOIN tblcustomer cust ON cart.BillingId = cust.BillingNumber
+      LEFT JOIN tblcategory cat ON p.CatID = cat.ID
+      WHERE DATE(cart.CartDate) BETWEEN '$fdate' AND '$tdate'
+        AND cart.IsCheckOut = '1'
+      GROUP BY p.ID
+      ORDER BY net_revenue DESC
+      LIMIT 10
+    ";
+    $res_top_products = mysqli_query($con, $sql_top_products);
+    ?>
+
+    <!-- Top produits -->
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="chart-container">
+          <h4><i class="icon-star"></i> Top 10 Produits (par chiffre d'affaires net)</h4>
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th width="5%">Rang</th>
+                <th width="25%">Produit</th>
+                <th width="15%">Catégorie</th>
+                <th width="10%">Qté vendue</th>
+                <th width="10%">Nb ventes</th>
+                <th width="15%">CA brut</th>
+                <th width="15%">CA net (après remises)</th>
+                <th width="5%">Performance</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php 
+              $rank = 1;
+              while($product = mysqli_fetch_assoc($res_top_products)): 
+                $discount_rate = (($product['gross_revenue'] - $product['net_revenue']) / $product['gross_revenue']) * 100;
+              ?>
+              <tr>
+                <td><span class="product-rank">#<?php echo $rank; ?></span></td>
+                <td>
+                  <strong><?php echo htmlspecialchars($product['ProductName']); ?></strong><br>
+                  <small><?php echo htmlspecialchars($product['ModelNumber']); ?></small>
+                </td>
+                <td><?php echo htmlspecialchars($product['CategoryName']); ?></td>
+                <td><?php echo $product['total_qty']; ?></td>
+                <td><?php echo $product['times_sold']; ?> fois</td>
+                <td><?php echo number_format($product['gross_revenue'], 0); ?></td>
+                <td>
+                  <strong><?php echo number_format($product['net_revenue'], 0); ?></strong>
+                  <?php if($discount_rate > 0): ?>
+                    <br><small class="text-warning">-<?php echo number_format($discount_rate, 1); ?>% remise</small>
+                  <?php endif; ?>
+                </td>
+                <td>
+                  <?php if($rank <= 3): ?>
+                    <span style="color: gold;">⭐</span>
+                  <?php else: ?>
+                    <span style="color: silver;">📊</span>
+                  <?php endif; ?>
+                </td>
+              </tr>
+              <?php 
+              $rank++;
+              endwhile; 
+              ?>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <?php
+    // ================================
+    // 3. ANALYSE PAR CLIENTS
+    // ================================
+    $sql_top_customers = "
+      SELECT 
+        cust.CustomerName,
+        cust.MobileNumber,
+        COUNT(DISTINCT cust.BillingNumber) as total_orders,
+        SUM(cust.FinalAmount) as total_spent,
+        AVG(cust.FinalAmount) as avg_order,
+        MAX(c.CartDate) as last_purchase
+      FROM tblcustomer cust
+      JOIN tblcart c ON c.BillingId = cust.BillingNumber
+      WHERE DATE(c.CartDate) BETWEEN '$fdate' AND '$tdate'
+        AND c.IsCheckOut = '1'
+      GROUP BY cust.CustomerName, cust.MobileNumber
+      ORDER BY total_spent DESC
+      LIMIT 10
+    ";
+    $res_top_customers = mysqli_query($con, $sql_top_customers);
+    ?>
+
+    <!-- Top clients -->
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="chart-container">
+          <h4><i class="icon-user"></i> Top 10 Clients (par valeur)</h4>
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th width="5%">Rang</th>
+                <th width="25%">Client</th>
+                <th width="15%">Téléphone</th>
+                <th width="10%">Nb commandes</th>
+                <th width="15%">Total dépensé</th>
+                <th width="15%">Panier moyen</th>
+                <th width="15%">Dernier achat</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php 
+              $rank = 1;
+              while($customer = mysqli_fetch_assoc($res_top_customers)): 
+              ?>
+              <tr>
+                <td><span class="customer-badge">#<?php echo $rank; ?></span></td>
+                <td><strong><?php echo htmlspecialchars($customer['CustomerName']); ?></strong></td>
+                <td><?php echo htmlspecialchars($customer['MobileNumber']); ?></td>
+                <td><?php echo $customer['total_orders']; ?></td>
+                <td><strong><?php echo number_format($customer['total_spent'], 0); ?></strong></td>
+                <td><?php echo number_format($customer['avg_order'], 0); ?></td>
+                <td><?php echo date('d/m/Y', strtotime($customer['last_purchase'])); ?></td>
+              </tr>
+              <?php 
+              $rank++;
+              endwhile; 
+              ?>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <?php
+    // ================================
+    // 4. ÉVOLUTION QUOTIDIENNE
+    // ================================
+    $sql_daily_evolution = "
+      SELECT 
+        DATE(c.CartDate) as sale_date,
+        COUNT(DISTINCT cust.BillingNumber) as daily_orders,
+        SUM(cust.FinalAmount) as daily_revenue,
+        COUNT(DISTINCT cust.ID) as daily_customers
+      FROM tblcustomer cust
+      JOIN tblcart c ON c.BillingId = cust.BillingNumber
+      WHERE DATE(c.CartDate) BETWEEN '$fdate' AND '$tdate'
+        AND c.IsCheckOut = '1'
+      GROUP BY DATE(c.CartDate)
+      ORDER BY sale_date ASC
+    ";
+    $res_daily = mysqli_query($con, $sql_daily_evolution);
+    ?>
+
+    <!-- Évolution quotidienne -->
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="chart-container">
+          <h4><i class="icon-line-chart"></i> Évolution quotidienne</h4>
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th width="20%">Date</th>
+                <th width="15%">Commandes</th>
+                <th width="20%">Chiffre d'affaires</th>
+                <th width="15%">Clients uniques</th>
+                <th width="15%">Panier moyen</th>
+                <th width="15%">Tendance</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php 
+              $previous_revenue = 0;
+              while($daily = mysqli_fetch_assoc($res_daily)): 
+                $avg_daily = $daily['daily_orders'] > 0 ? $daily['daily_revenue'] / $daily['daily_orders'] : 0;
+                $trend = '';
+                if($previous_revenue > 0) {
+                  $change = (($daily['daily_revenue'] - $previous_revenue) / $previous_revenue) * 100;
+                  if($change > 0) {
+                    $trend = '<span class="positive">↗ +' . number_format($change, 1) . '%</span>';
+                  } elseif($change < 0) {
+                    $trend = '<span class="negative">↘ ' . number_format($change, 1) . '%</span>';
+                  } else {
+                    $trend = '<span>→ 0%</span>';
+                  }
+                }
+                $previous_revenue = $daily['daily_revenue'];
+              ?>
+              <tr>
+                <td><strong><?php echo date('d/m/Y (D)', strtotime($daily['sale_date'])); ?></strong></td>
+                <td><?php echo $daily['daily_orders']; ?></td>
+                <td><strong><?php echo number_format($daily['daily_revenue'], 0); ?></strong></td>
+                <td><?php echo $daily['daily_customers']; ?></td>
+                <td><?php echo number_format($avg_daily, 0); ?></td>
+                <td><?php echo $trend; ?></td>
+              </tr>
+              <?php endwhile; ?>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <?php
+    // ================================
+    // 5. ANALYSE PAR CATÉGORIE
+    // ================================
+    $sql_category_analysis = "
+      SELECT 
+        COALESCE(cat.CategoryName, 'Sans catégorie') as category_name,
+        COUNT(DISTINCT p.ID) as products_count,
+        SUM(cart.ProductQty) as total_qty_sold,
+        SUM(cart.ProductQty * cart.Price) as gross_revenue,
+        SUM((cart.ProductQty * cart.Price) * (cust.FinalAmount / (
+          SELECT SUM(c2.ProductQty * c2.Price) 
+          FROM tblcart c2 
+          WHERE c2.BillingId = cust.BillingNumber
+        ))) as net_revenue,
+        COUNT(DISTINCT cust.BillingNumber) as orders_count
+      FROM tblproducts p
+      LEFT JOIN tblcategory cat ON p.CatID = cat.ID
+      JOIN tblcart cart ON p.ID = cart.ProductId
+      JOIN tblcustomer cust ON cart.BillingId = cust.BillingNumber
+      WHERE DATE(cart.CartDate) BETWEEN '$fdate' AND '$tdate'
+        AND cart.IsCheckOut = '1'
+      GROUP BY cat.ID
+      ORDER BY net_revenue DESC
+    ";
+    $res_categories = mysqli_query($con, $sql_category_analysis);
+    ?>
+
+    <!-- Analyse par catégorie -->
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="chart-container">
+          <h4><i class="icon-tags"></i> Performance par catégorie</h4>
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th width="25%">Catégorie</th>
+                <th width="10%">Produits</th>
+                <th width="15%">Quantité vendue</th>
+                <th width="10%">Commandes</th>
+                <th width="15%">CA brut</th>
+                <th width="15%">CA net</th>
+                <th width="10%">Part du CA</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php 
+              while($category = mysqli_fetch_assoc($res_categories)): 
+                $ca_share = ($category['net_revenue'] / $current_stats['total_revenue']) * 100;
+              ?>
+              <tr>
+                <td><strong><?php echo htmlspecialchars($category['category_name']); ?></strong></td>
+                <td><?php echo $category['products_count']; ?></td>
+                <td><?php echo $category['total_qty_sold']; ?></td>
+                <td><?php echo $category['orders_count']; ?></td>
+                <td><?php echo number_format($category['gross_revenue'], 0); ?></td>
+                <td><strong><?php echo number_format($category['net_revenue'], 0); ?></strong></td>
+                <td>
+                  <strong><?php echo number_format($ca_share, 1); ?>%</strong>
+                  <div style="background: #3498db; height: 4px; width: <?php echo min(100, $ca_share * 2); ?>%; margin-top: 2px;"></div>
+                </td>
+              </tr>
+              <?php endwhile; ?>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions et exports -->
+    <div class="row-fluid no-print" style="margin-top: 30px;">
+      <div class="span12 text-center">
+        <button class="btn btn-primary" onclick="window.print();">
+          <i class="icon-print"></i> Imprimer le rapport
+        </button>
+        <a href="sales-report.php" class="btn">
+          <i class="icon-arrow-left"></i> Nouvelle analyse
+        </a>
+        <a href="report.php" class="btn btn-info">
+          <i class="icon-chart-bar"></i> Rapport financier
+        </a>
+      </div>
+    </div>
+
+    <!-- En-tête pour l'impression -->
+    <div class="print-header">
+      <h2>Système de Gestion d'Inventaire</h2>
+      <h3>Rapport de ventes détaillé</h3>
+      <p>Période du <?php echo date('d/m/Y', strtotime($fdate)); ?> au <?php echo date('d/m/Y', strtotime($tdate)); ?></p>
+      <p>Généré le <?php echo date('d/m/Y à H:i'); ?></p>
+    </div>
+
   </div>
 </div>
 
-<!-- Pied de page - caché à l'impression -->
 <div class="no-print">
   <?php include_once('includes/footer.php');?>
 </div>
 
-<!-- Scripts JS - ne s'exécutent pas lors de l'impression -->
 <script src="js/jquery.min.js"></script> 
-<script src="js/jquery.ui.custom.js"></script> 
+<script src="js/jquery.ui.custom.js"></script> a
 <script src="js/bootstrap.min.js"></script> 
 <script src="js/jquery.uniform.js"></script> 
 <script src="js/select2.min.js"></script> 
