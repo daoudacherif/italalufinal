@@ -106,6 +106,7 @@ try {
       <ul>
         <li><a href="client-account.php">Compte client</a></li>
         <li><a href="customer-details.php">Détails client</a></li>
+        <li><a href="manage_customers.php"> client</a></li>
       </ul>
     </li>
 
