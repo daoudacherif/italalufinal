@@ -208,10 +208,70 @@ while ($row = mysqli_fetch_assoc($productQuery)) {
     $productNames[] = $row['ProductName'];
 }
 
-// Checkout + Facturation - VERSION SIMPLIFIÉE SANS DOUBLE ENVOI
+// Récupérer la liste des clients existants
+$existingCustomers = [];
+$customerQuery = mysqli_query($con, "SELECT id, CustomerName, CustomerContact, CustomerEmail FROM tblcustomer ORDER BY CustomerName");
+while ($row = mysqli_fetch_assoc($customerQuery)) {
+    $existingCustomers[] = $row;
+}
+
+// Checkout + Facturation - VERSION AVEC GESTION DES CLIENTS
 if (isset($_POST['submit'])) {
-    $custname = mysqli_real_escape_string($con, trim($_POST['customername']));
-    $custmobile = preg_replace('/[^0-9+]/', '', $_POST['mobilenumber']);
+    $customerType = $_POST['customer_type']; // 'existing' ou 'new'
+    $custname = '';
+    $custmobile = '';
+    $custemail = '';
+    $custaddress = '';
+    $selectedCustomerId = null;
+    
+    if ($customerType === 'existing') {
+        // Client existant sélectionné
+        $selectedCustomerId = intval($_POST['existing_customer']);
+        
+        // Récupérer les infos du client
+        $customerInfo = mysqli_query($con, "SELECT CustomerName, CustomerContact, CustomerEmail, CustomerAddress FROM tblcustomer WHERE id='$selectedCustomerId'");
+        if ($customerData = mysqli_fetch_assoc($customerInfo)) {
+            $custname = $customerData['CustomerName'];
+            $custmobile = $customerData['CustomerContact'];
+            $custemail = $customerData['CustomerEmail'];
+            $custaddress = $customerData['CustomerAddress'];
+        } else {
+            echo "<script>alert('Client sélectionné introuvable'); window.location='dettecart.php';</script>";
+            exit;
+        }
+    } else {
+        // Nouveau client
+        $custname = mysqli_real_escape_string($con, trim($_POST['customername']));
+        $custmobile = preg_replace('/[^0-9+]/', '', $_POST['mobilenumber']);
+        $custemail = mysqli_real_escape_string($con, trim($_POST['customeremail']));
+        $custaddress = mysqli_real_escape_string($con, trim($_POST['customeraddress']));
+        
+        // Validation pour nouveau client
+        if (empty($custname) || empty($custmobile)) {
+            echo "<script>alert('Le nom et le numéro de téléphone sont obligatoires'); window.location='dettecart.php';</script>";
+            exit;
+        }
+        
+        // Vérifier le format du numéro
+        if (!preg_match('/^(\+?224)?6[0-9]{8}$/', $custmobile)) {
+            echo "<script>alert('Format de numéro invalide'); window.location='dettecart.php';</script>";
+            exit;
+        }
+        
+        // Créer le nouveau client dans tblcustomer
+        $insertNewCustomer = mysqli_query($con, "
+            INSERT INTO tblcustomer (CustomerName, CustomerContact, CustomerEmail, CustomerAddress, CustomerRegdate)
+            VALUES ('$custname', '$custmobile', '$custemail', '$custaddress', NOW())
+        ");
+        
+        if ($insertNewCustomer) {
+            $selectedCustomerId = mysqli_insert_id($con);
+        } else {
+            echo "<script>alert('Erreur lors de la création du client'); window.location='dettecart.php';</script>";
+            exit;
+        }
+    }
+    
     $modepayment = mysqli_real_escape_string($con, $_POST['modepayment']);
     $paidNow = max(0, floatval($_POST['paid']));
     
@@ -259,19 +319,51 @@ if (isset($_POST['submit'])) {
     mysqli_autocommit($con, FALSE);
     
     try {
-        // 1. Update cart with billing number
-        $updateCart = mysqli_query($con, "UPDATE tblcreditcart SET BillingId='$billingnum', IsCheckOut=1 WHERE IsCheckOut=0");
+        // Récupération de la date d'échéance
+        $dateEcheance = null;
+        if (!empty($_POST['date_echeance'])) {
+            $dateEcheance = mysqli_real_escape_string($con, $_POST['date_echeance']);
+        } else if ($modepayment === 'credit') {
+            // Si c'est un crédit sans date spécifiée, ajouter 30 jours par défaut
+            $dateEcheance = date('Y-m-d', strtotime('+30 days'));
+        }
+
+        // 1. Update cart with billing number and date d'échéance
+        $updateCartQuery = "UPDATE tblcreditcart SET BillingId='$billingnum', IsCheckOut=1";
+        if ($dateEcheance) {
+            $updateCartQuery .= ", DateEcheance='$dateEcheance'";
+        }
+        $updateCartQuery .= " WHERE IsCheckOut=0";
+        
+        $updateCart = mysqli_query($con, $updateCartQuery);
         if (!$updateCart) throw new Exception('Failed to update cart');
         
-        // 2. Insert customer record
-        $insertCustomer = mysqli_query($con, "
-            INSERT INTO tblcustomer(BillingNumber, CustomerName, MobileNumber, ModeOfPayment, BillingDate, FinalAmount, Paid, Dues)
-            VALUES('$billingnum', '$custname', '$custmobile', '$modepayment', NOW(), '$netTotal', '$paidNow', '$dues')
-        ");
-        if (!$insertCustomer) throw new Exception('Failed to insert customer record');
+        // 2. Update existing customer record with billing info
+        $updateCustomerQuery = "
+            UPDATE tblcustomer SET 
+                BillingNumber='$billingnum', 
+                ModeOfPayment='$modepayment', 
+                BillingDate=NOW(), 
+                FinalAmount='$netTotal', 
+                Paid='$paidNow', 
+                Dues='$dues'";
         
-        // Get the customer ID for the payment record
-        $customerId = mysqli_insert_id($con);
+        // Ajouter la date d'échéance et le statut de recouvrement si applicable
+        if ($dateEcheance) {
+            $updateCustomerQuery .= ", DateEcheance='$dateEcheance'";
+        }
+        
+        // Définir le statut de recouvrement initial
+        if ($dues > 0) {
+            $updateCustomerQuery .= ", StatutRecouvrement='EN_COURS', NombreRelances=0";
+        } else {
+            $updateCustomerQuery .= ", StatutRecouvrement='REGLE'";
+        }
+        
+        $updateCustomerQuery .= " WHERE id='$selectedCustomerId'";
+        
+        $updateCustomer = mysqli_query($con, $updateCustomerQuery);
+        if (!$updateCustomer) throw new Exception('Failed to update customer record');
         
         // 3. Insert payment record ONLY if there was an actual payment
         if ($paidNow > 0) {
@@ -280,7 +372,7 @@ if (isset($_POST['submit'])) {
             
             $insertPayment = mysqli_query($con, "
                 INSERT INTO tblpayments(CustomerID, BillingNumber, PaymentAmount, PaymentDate, PaymentMethod, ReferenceNumber, Comments)
-                VALUES('$customerId', '$billingnum', '$paidNow', NOW(), '$modepayment', '$paymentReference', '$paymentComments')
+                VALUES('$selectedCustomerId', '$billingnum', '$paidNow', NOW(), '$modepayment', '$paymentReference', '$paymentComments')
             ");
             if (!$insertPayment) throw new Exception('Failed to insert payment record');
         }
@@ -461,6 +553,60 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             margin-left: 20px;
             margin-top: 5px;
         }
+        
+        .customer-selection {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .customer-type-radio {
+            margin-bottom: 15px;
+        }
+        
+        .customer-type-radio label {
+            margin-right: 20px;
+            font-weight: bold;
+        }
+        
+        .customer-form-section {
+            display: none;
+            border-top: 1px solid #dee2e6;
+            padding-top: 15px;
+            margin-top: 10px;
+        }
+        
+        .customer-form-section.active {
+            display: block;
+        }
+        
+        .customer-info-display {
+            background-color: #e7f3ff;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        
+        .manage-customers-link {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .manage-customers-link a {
+            color: #155724;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        
+        .manage-customers-link a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -481,6 +627,15 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
   
         <div class="container-fluid">
             <hr>
+            
+            <!-- Lien vers la gestion des clients -->
+            <div class="manage-customers-link">
+                <i class="icon-user"></i>
+                <a href="manage_customers.php" target="_blank">
+                    Gérer les Clients (Ajouter, Modifier, Supprimer)
+                </a>
+                - Ouvrir dans un nouvel onglet pour créer ou modifier des clients
+            </div>
             
             <!-- Indicateur de panier utilisateur (visuel uniquement) -->
             <div class="user-cart-indicator">
@@ -643,25 +798,87 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
 
                     <!-- FORMULAIRE DE CHECKOUT (informations client + montant payé) -->
                     <form method="post" class="form-horizontal" name="submit">
-                        <div class="control-group">
-                            <label class="control-label">Nom du Client :</label>
-                            <div class="controls">
-                                <input type="text" class="span11" name="customername" required />
+                        
+                        <!-- Sélection du type de client -->
+                        <div class="customer-selection">
+                            <h4><i class="icon-user"></i> Informations Client</h4>
+                            
+                            <div class="customer-type-radio">
+                                <label>
+                                    <input type="radio" name="customer_type" value="existing" id="existing_customer_radio">
+                                    Client Existant
+                                </label>
+                                <label>
+                                    <input type="radio" name="customer_type" value="new" id="new_customer_radio" checked>
+                                    Nouveau Client
+                                </label>
+                            </div>
+                            
+                            <!-- Section pour client existant -->
+                            <div class="customer-form-section" id="existing_customer_section">
+                                <div class="control-group">
+                                    <label class="control-label">Sélectionner le Client :</label>
+                                    <div class="controls">
+                                        <select name="existing_customer" id="customer_select" class="span6">
+                                            <option value="">-- Choisir un client --</option>
+                                            <?php foreach ($existingCustomers as $customer): ?>
+                                                <option value="<?php echo $customer['id']; ?>" 
+                                                        data-name="<?php echo htmlspecialchars($customer['CustomerName']); ?>"
+                                                        data-contact="<?php echo htmlspecialchars($customer['CustomerContact']); ?>"
+                                                        data-email="<?php echo htmlspecialchars($customer['CustomerEmail']); ?>">
+                                                    <?php echo htmlspecialchars($customer['CustomerName']); ?> 
+                                                    (<?php echo htmlspecialchars($customer['CustomerContact']); ?>)
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <!-- Affichage des infos du client sélectionné -->
+                                <div class="customer-info-display" id="customer_info" style="display: none;">
+                                    <h5>Informations du client sélectionné :</h5>
+                                    <p><strong>Nom :</strong> <span id="selected_name"></span></p>
+                                    <p><strong>Téléphone :</strong> <span id="selected_contact"></span></p>
+                                    <p><strong>Email :</strong> <span id="selected_email"></span></p>
+                                </div>
+                            </div>
+                            
+                            <!-- Section pour nouveau client -->
+                            <div class="customer-form-section active" id="new_customer_section">
+                                <div class="control-group">
+                                    <label class="control-label">Nom du Client :</label>
+                                    <div class="controls">
+                                        <input type="text" class="span6" name="customername" id="new_customer_name" />
+                                    </div>
+                                </div>
+                                <div class="control-group">
+                                    <label class="control-label">Numéro de Mobile :</label>
+                                    <div class="controls">
+                                        <input type="tel"
+                                               class="span6"
+                                               name="mobilenumber"
+                                               id="new_customer_mobile"
+                                               pattern="^(\+?224)?6[0-9]{8}$"
+                                               placeholder="623XXXXXXXX ou +224623XXXXXXXX"
+                                               title="Format: 623XXXXXXXX, 224623XXXXXXXX ou +224623XXXXXXXX">
+                                        <span class="help-inline">Formats acceptés: 623XXXXXXXX, 224623XXXXXXXX, +224623XXXXXXXX</span>
+                                    </div>
+                                </div>
+                                <div class="control-group">
+                                    <label class="control-label">Email :</label>
+                                    <div class="controls">
+                                        <input type="email" class="span6" name="customeremail" id="new_customer_email" />
+                                    </div>
+                                </div>
+                                <div class="control-group">
+                                    <label class="control-label">Adresse :</label>
+                                    <div class="controls">
+                                        <textarea name="customeraddress" class="span6" rows="2" id="new_customer_address"></textarea>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <div class="control-group">
-                            <label class="control-label">Numéro de Mobile :</label>
-                            <div class="controls">
-                                <input type="tel"
-                                       class="span11"
-                                       name="mobilenumber"
-                                       required
-                                       pattern="^(\+?224)?6[0-9]{8}$"
-                                       placeholder="623XXXXXXXX ou +224623XXXXXXXX"
-                                       title="Format: 623XXXXXXXX, 224623XXXXXXXX ou +224623XXXXXXXX">
-                                <span class="help-inline">Formats acceptés: 623XXXXXXXX, 224623XXXXXXXX, +224623XXXXXXXX</span>
-                            </div>
-                        </div>
+                        
                         <div class="control-group">
                             <label class="control-label">Mode de Paiement :</label>
                             <div class="controls">
@@ -670,10 +887,22 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                 <label><input type="radio" name="modepayment" value="credit"> Crédit (Terme)</label>
                             </div>
                         </div>
+                        
+                        <!-- Champ Date d'échéance (visible pour le crédit) -->
+                        <div class="control-group" id="echeance_group" style="display: none;">
+                            <label class="control-label">Date d'Échéance :</label>
+                            <div class="controls">
+                                <input type="date" name="date_echeance" id="date_echeance" class="span6" 
+                                       value="<?php echo date('Y-m-d', strtotime('+30 days')); ?>">
+                                <span class="help-inline">
+                                    Date limite de paiement pour les ventes à crédit (par défaut : 30 jours)
+                                </span>
+                            </div>
+                        </div>
                         <div class="control-group">
                             <label class="control-label">Montant Payé Maintenant :</label>
                             <div class="controls">
-                                <input type="number" name="paid" step="any" value="0" class="span11" />
+                                <input type="number" name="paid" step="any" value="0" class="span6" />
                                 <p style="font-size: 12px; color: #666;">(Laissez 0 si rien n'est payé maintenant)</p>
                             </div>
                         </div>
@@ -829,11 +1058,68 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
     <script src="js/matrix.js"></script>
     <script src="js/matrix.tables.js"></script>
 
-    <!-- Script de validation du formulaire en temps réel -->
+    <!-- Script de gestion des clients et validation -->
     <script>
     document.addEventListener('DOMContentLoaded', function() {
+        // Gestion des types de clients
+        const existingRadio = document.getElementById('existing_customer_radio');
+        const newRadio = document.getElementById('new_customer_radio');
+        const existingSection = document.getElementById('existing_customer_section');
+        const newSection = document.getElementById('new_customer_section');
+        const customerSelect = document.getElementById('customer_select');
+        const customerInfo = document.getElementById('customer_info');
+        
+        // Fonction pour basculer entre les sections
+        function toggleCustomerSections() {
+            if (existingRadio.checked) {
+                existingSection.classList.add('active');
+                newSection.classList.remove('active');
+                
+                // Rendre obligatoire la sélection d'un client
+                customerSelect.required = true;
+                
+                // Supprimer l'obligation des champs nouveau client
+                document.getElementById('new_customer_name').required = false;
+                document.getElementById('new_customer_mobile').required = false;
+            } else {
+                existingSection.classList.remove('active');
+                newSection.classList.add('active');
+                
+                // Supprimer l'obligation de sélection
+                customerSelect.required = false;
+                customerInfo.style.display = 'none';
+                
+                // Rendre obligatoires les champs nouveau client
+                document.getElementById('new_customer_name').required = true;
+                document.getElementById('new_customer_mobile').required = true;
+            }
+        }
+        
+        // Événements pour les radios
+        existingRadio.addEventListener('change', toggleCustomerSections);
+        newRadio.addEventListener('change', toggleCustomerSections);
+        
+        // Gestion de la sélection d'un client existant
+        customerSelect.addEventListener('change', function() {
+            const selectedOption = this.options[this.selectedIndex];
+            
+            if (selectedOption.value) {
+                const customerName = selectedOption.getAttribute('data-name');
+                const customerContact = selectedOption.getAttribute('data-contact');
+                const customerEmail = selectedOption.getAttribute('data-email');
+                
+                document.getElementById('selected_name').textContent = customerName;
+                document.getElementById('selected_contact').textContent = customerContact;
+                document.getElementById('selected_email').textContent = customerEmail || 'Non renseigné';
+                
+                customerInfo.style.display = 'block';
+            } else {
+                customerInfo.style.display = 'none';
+            }
+        });
+        
         // Validation du numéro de téléphone en temps réel
-        const mobileInput = document.querySelector('input[name="mobilenumber"]');
+        const mobileInput = document.getElementById('new_customer_mobile');
         const nimbaFormats = /^(\+?224)?6[0-9]{8}$/;
         
         if (mobileInput) {
@@ -851,33 +1137,82 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             });
         }
         
-        // Validation de la longueur du message SMS
+        // Validation du formulaire avant soumission
         const form = document.querySelector('form[name="submit"]');
         if (form) {
             form.addEventListener('submit', function(e) {
-                const customerName = document.querySelector('input[name="customername"]').value;
-                const mobile = document.querySelector('input[name="mobilenumber"]').value;
-                const sendSms = document.querySelector('input[name="send_sms"]').checked;
+                const customerType = document.querySelector('input[name="customer_type"]:checked').value;
                 
-                if (sendSms) {
-                    // Simuler le message SMS qui sera envoyé
-                    const testMessage = `Bonjour ${customerName}, votre commande (Facture No: 1234) a été validée. Solde dû: 100 000 GNF. Merci.`;
+                if (customerType === 'existing') {
+                    const selectedCustomer = customerSelect.value;
+                    if (!selectedCustomer) {
+                        alert('Veuillez sélectionner un client existant');
+                        e.preventDefault();
+                        return false;
+                    }
+                } else {
+                    const customerName = document.getElementById('new_customer_name').value;
+                    const mobile = document.getElementById('new_customer_mobile').value;
                     
-                    if (testMessage.length > 665) {
-                        alert('Le message SMS généré sera trop long (' + testMessage.length + ' caractères). Limite: 665 caractères. Raccourcissez le nom du client.');
+                    if (!customerName.trim() || !mobile.trim()) {
+                        alert('Le nom et le numéro de téléphone sont obligatoires pour un nouveau client');
                         e.preventDefault();
                         return false;
                     }
                     
-                    // Vérifier le format du numéro avant envoi
+                    // Vérifier le format du numéro
                     if (!nimbaFormats.test(mobile.replace(/[^0-9+]/g, ''))) {
                         alert('Format de numéro invalide. Utilisez: 623XXXXXXXX, 224623XXXXXXXX ou +224623XXXXXXXX');
                         e.preventDefault();
                         return false;
                     }
+                    
+                    // Validation de la longueur du message SMS
+                    const sendSms = document.querySelector('input[name="send_sms"]').checked;
+                    if (sendSms) {
+                        const testMessage = `Bonjour ${customerName}, votre commande (Facture No: 1234) a été validée. Solde dû: 100 000 GNF. Merci.`;
+                        
+                        if (testMessage.length > 665) {
+                            alert('Le message SMS généré sera trop long (' + testMessage.length + ' caractères). Limite: 665 caractères. Raccourcissez le nom du client.');
+                            e.preventDefault();
+                            return false;
+                        }
+                    }
                 }
             });
         }
+        
+        // Gestion de l'affichage de la date d'échéance selon le mode de paiement
+        const paymentMethods = document.querySelectorAll('input[name="modepayment"]');
+        const echeanceGroup = document.getElementById('echeance_group');
+        const dateEcheance = document.getElementById('date_echeance');
+        
+        function toggleEcheanceField() {
+            const selectedPayment = document.querySelector('input[name="modepayment"]:checked').value;
+            
+            if (selectedPayment === 'credit') {
+                echeanceGroup.style.display = 'block';
+                dateEcheance.required = true;
+                // Définir une date par défaut à 30 jours si vide
+                if (!dateEcheance.value) {
+                    const futureDate = new Date();
+                    futureDate.setDate(futureDate.getDate() + 30);
+                    dateEcheance.value = futureDate.toISOString().split('T')[0];
+                }
+            } else {
+                echeanceGroup.style.display = 'none';
+                dateEcheance.required = false;
+                dateEcheance.value = ''; // Vider le champ si ce n'est pas un crédit
+            }
+        }
+        
+        // Attacher les événements
+        paymentMethods.forEach(function(radio) {
+            radio.addEventListener('change', toggleEcheanceField);
+        });
+        
+        // Initialiser l'affichage
+        toggleEcheanceField();
     });
     </script>
 </body>
