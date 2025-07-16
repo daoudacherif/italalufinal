@@ -34,23 +34,6 @@ if (isset($_POST['save_config'])) {
 $defaultDays = $_SESSION['default_echeance_days'] ?? 30;
 $defaultType = $_SESSION['default_echeance_type'] ?? '30_jours';
 
-// Configuration des échéances - Traitement
-if (isset($_POST['save_config'])) {
-    $defaultDays = intval($_POST['default_days']);
-    $defaultType = mysqli_real_escape_string($con, $_POST['default_type']);
-    
-    // Sauvegarder dans les préférences session
-    $_SESSION['default_echeance_days'] = $defaultDays;
-    $_SESSION['default_echeance_type'] = $defaultType;
-    
-    echo "<script>alert('Configuration sauvegardée !'); window.location.href='dettecart.php';</script>";
-    exit;
-}
-
-// Récupérer la configuration par défaut
-$defaultDays = $_SESSION['default_echeance_days'] ?? 30;
-$defaultType = $_SESSION['default_echeance_type'] ?? '30_jours';
-
 /**
  * Fonction pour calculer la date d'échéance
  */
@@ -553,6 +536,27 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             color: #27a9e3;
         }
         
+        /* Configuration échéances */
+        .config-echeances {
+            background-color: #f0f8ff;
+            border: 1px solid #b8daff;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .config-echeances h4 {
+            color: #007bff;
+            margin-bottom: 15px;
+        }
+        
+        .config-form {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+        }
+        
         .sms-option {
             background-color: #f8f9fa;
             border: 1px solid #dee2e6;
@@ -705,50 +709,6 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             font-weight: bold;
             color: #28a745;
         }
-        
-        /* Styles pour la configuration */
-        .config-section {
-            background-color: #f0f8ff;
-            border: 1px solid #b8daff;
-            border-radius: 4px;
-            margin-bottom: 20px;
-        }
-        
-        .config-section .widget-title {
-            background-color: #007bff;
-            color: white;
-        }
-        
-        .config-section .widget-content {
-            background-color: #f8f9fa;
-        }
-        
-        .config-form {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-wrap: wrap;
-            gap: 10px;
-            padding: 15px;
-        }
-        
-        .config-form label {
-            font-weight: bold;
-            margin-bottom: 0;
-        }
-        
-        .config-form select, .config-form input {
-            margin: 0;
-        }
-        
-        .config-help {
-            font-style: italic;
-            color: #6c757d;
-            font-size: 11px;
-            width: 100%;
-            text-align: center;
-            margin-top: 10px;
-        }
     </style>
 </head>
 <body>
@@ -770,18 +730,14 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             <hr>
             
             <!-- Configuration rapide des échéances -->
-            <div class="row-fluid">
-                <div class="span12">
-                    <div class="widget-box config-section">
-                        <div class="widget-title">
-                            <span class="icon"><i class="icon-cog"></i></span>
-                            <h5>⚙️ Configuration Échéances par Défaut</h5>
-                        </div>
-                        <div class="widget-content">
-                            <form method="post" class="config-form">
-                                <label>Type d'échéance :</label>
-                                
-                                <select name="default_type">
+            <div class="config-echeances">
+                <h4><i class="icon-cog"></i> ⚙️ Configuration Échéances par Défaut</h4>
+                <div class="config-form">
+                    <form method="post" class="form-horizontal">
+                        <div class="control-group">
+                            <label class="control-label"><strong>Type d'échéance :</strong></label>
+                            <div class="controls">
+                                <select name="default_type" style="width: 150px;">
                                     <option value="immediat" <?php echo ($defaultType == 'immediat') ? 'selected' : ''; ?>>Immédiat</option>
                                     <option value="7_jours" <?php echo ($defaultType == '7_jours') ? 'selected' : ''; ?>>7 jours</option>
                                     <option value="15_jours" <?php echo ($defaultType == '15_jours') ? 'selected' : ''; ?>>15 jours</option>
@@ -790,20 +746,43 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                     <option value="90_jours" <?php echo ($defaultType == '90_jours') ? 'selected' : ''; ?>>90 jours</option>
                                     <option value="personnalise" <?php echo ($defaultType == 'personnalise') ? 'selected' : ''; ?>>Personnalisé</option>
                                 </select>
-                                
-                                <label>Nombre de jours :</label>
-                                <input type="number" name="default_days" value="<?php echo $defaultDays; ?>" min="1" max="365" style="width: 70px;" />
-                                
-                                <button type="submit" name="save_config" class="btn btn-success btn-small">
-                                    <i class="icon-ok"></i> Sauvegarder
-                                </button>
-                                
-                                <div class="config-help">
-                                    Cette configuration sera appliquée par défaut à tous les nouveaux articles ajoutés au panier
-                                </div>
-                            </form>
+                            </div>
                         </div>
-                    </div>
+                        
+                        <div class="control-group">
+                            <label class="control-label"><strong>Nombre de jours :</strong></label>
+                            <div class="controls">
+                                <input type="number" name="default_days" value="<?php echo $defaultDays; ?>" min="1" max="365" style="width: 80px;" />
+                                <span class="help-inline">jours (entre 1 et 365)</span>
+                            </div>
+                        </div>
+                        
+                        <div class="form-actions" style="text-align: center; margin-bottom: 0;">
+                            <button type="submit" name="save_config" class="btn btn-success">
+                                <i class="icon-ok"></i> Sauvegarder Configuration
+                            </button>
+                            <div style="margin-top: 10px;">
+                                <span style="color: #666; font-size: 12px; font-style: italic;">
+                                    Cette configuration sera appliquée par défaut à tous les nouveaux articles
+                                </span>
+                                <br>
+                                <span style="color: #28a745; font-size: 11px; font-weight: bold;">
+                                    Configuration actuelle : <?php 
+                                    switch($defaultType) {
+                                        case 'immediat': echo 'Immédiat'; break;
+                                        case '7_jours': echo '7 jours'; break;
+                                        case '15_jours': echo '15 jours'; break;
+                                        case '30_jours': echo '30 jours'; break;
+                                        case '60_jours': echo '60 jours'; break;
+                                        case '90_jours': echo '90 jours'; break;
+                                        case 'personnalise': echo "Personnalisé ($defaultDays jours)"; break;
+                                        default: echo "$defaultDays jours";
+                                    }
+                                    ?>
+                                </span>
+                            </div>
+                        </div>
+                    </form>
                 </div>
             </div>
             
@@ -820,70 +799,6 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             <div class="user-cart-indicator">
                 <i class="icon-user"></i> <strong>Panier géré par: <?php echo htmlspecialchars($currentAdminName); ?></strong>
                 <p class="text-muted small">Système d'échéances intégré pour la gestion des créances</p>
-            </div>
-            
-            <!-- Configuration rapide des échéances -->
-            <div class="row-fluid">
-                <div class="span12">
-                    <div class="widget-box" style="background-color: #f0f8ff; border: 1px solid #b8daff; border-radius: 4px; margin-bottom: 20px;">
-                        <div class="widget-title" style="background-color: #007bff; color: white;">
-                            <span class="icon"><i class="icon-cog"></i></span>
-                            <h5>⚙️ Configuration Échéances par Défaut</h5>
-                        </div>
-                        <div class="widget-content" style="background-color: #f8f9fa; padding: 15px;">
-                            <form method="post" class="form-horizontal">
-                                <div class="control-group">
-                                    <label class="control-label"><strong>Type d'échéance :</strong></label>
-                                    <div class="controls">
-                                        <select name="default_type" style="width: 150px;">
-                                            <option value="immediat" <?php echo ($defaultType == 'immediat') ? 'selected' : ''; ?>>Immédiat</option>
-                                            <option value="7_jours" <?php echo ($defaultType == '7_jours') ? 'selected' : ''; ?>>7 jours</option>
-                                            <option value="15_jours" <?php echo ($defaultType == '15_jours') ? 'selected' : ''; ?>>15 jours</option>
-                                            <option value="30_jours" <?php echo ($defaultType == '30_jours') ? 'selected' : ''; ?>>30 jours</option>
-                                            <option value="60_jours" <?php echo ($defaultType == '60_jours') ? 'selected' : ''; ?>>60 jours</option>
-                                            <option value="90_jours" <?php echo ($defaultType == '90_jours') ? 'selected' : ''; ?>>90 jours</option>
-                                            <option value="personnalise" <?php echo ($defaultType == 'personnalise') ? 'selected' : ''; ?>>Personnalisé</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                
-                                <div class="control-group">
-                                    <label class="control-label"><strong>Nombre de jours :</strong></label>
-                                    <div class="controls">
-                                        <input type="number" name="default_days" value="<?php echo $defaultDays; ?>" min="1" max="365" style="width: 80px;" />
-                                        <span class="help-inline">jours (entre 1 et 365)</span>
-                                    </div>
-                                </div>
-                                
-                                <div class="form-actions" style="text-align: center; margin-bottom: 0;">
-                                    <button type="submit" name="save_config" class="btn btn-success">
-                                        <i class="icon-ok"></i> Sauvegarder Configuration
-                                    </button>
-                                    <div style="margin-top: 10px;">
-                                        <span style="color: #666; font-size: 12px; font-style: italic;">
-                                            Cette configuration sera appliquée par défaut à tous les nouveaux articles
-                                        </span>
-                                        <br>
-                                        <span style="color: #28a745; font-size: 11px; font-weight: bold;">
-                                            Configuration actuelle : <?php 
-                                            switch($defaultType) {
-                                                case 'immediat': echo 'Immédiat'; break;
-                                                case '7_jours': echo '7 jours'; break;
-                                                case '15_jours': echo '15 jours'; break;
-                                                case '30_jours': echo '30 jours'; break;
-                                                case '60_jours': echo '60 jours'; break;
-                                                case '90_jours': echo '90 jours'; break;
-                                                case 'personnalise': echo "Personnalisé ($defaultDays jours)"; break;
-                                                default: echo "$defaultDays jours";
-                                            }
-                                            ?>
-                                        </span>
-                                    </div>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                </div>
             </div>
             
             <?php if ($hasStockIssue): ?>
@@ -1263,4 +1178,209 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
         </div>
     </div>
   
-    <?
+    <?php include_once('includes/footer.php'); ?>
+    
+    <script src="js/jquery.min.js"></script>
+    <script src="js/jquery.ui.custom.js"></script>
+    <script src="js/bootstrap.min.js"></script>
+    <script src="js/jquery.uniform.js"></script>
+    <script src="js/select2.min.js"></script>
+    <script src="js/jquery.dataTables.min.js"></script>
+    <script src="js/matrix.js"></script>
+    <script src="js/matrix.tables.js"></script>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('🔧 JavaScript de dettecart.php initialisé');
+        
+        // Gestion des types de clients - VERSION CORRIGÉE
+        const existingRadio = document.getElementById('existing_customer_radio');
+        const newRadio = document.getElementById('new_customer_radio');
+        const existingSection = document.getElementById('existing_customer_section');
+        const newSection = document.getElementById('new_customer_section');
+        const customerSelect = document.getElementById('customer_select');
+        const customerInfo = document.getElementById('customer_info');
+        
+        console.log('Éléments trouvés:', {
+            existingRadio: !!existingRadio,
+            newRadio: !!newRadio,
+            existingSection: !!existingSection,
+            newSection: !!newSection,
+            customerSelect: !!customerSelect,
+            customerInfo: !!customerInfo
+        });
+        
+        function toggleCustomerSections() {
+            console.log('toggleCustomerSections appelée');
+            
+            if (existingRadio && existingRadio.checked) {
+                console.log('Mode: Client existant');
+                if (existingSection) {
+                    existingSection.classList.add('active');
+                    existingSection.style.display = 'block';
+                }
+                if (newSection) {
+                    newSection.classList.remove('active');
+                    newSection.style.display = 'none';
+                }
+                if (customerSelect) customerSelect.required = true;
+                
+                const nameField = document.getElementById('new_customer_name');
+                const mobileField = document.getElementById('new_customer_mobile');
+                if (nameField) nameField.required = false;
+                if (mobileField) mobileField.required = false;
+            } else if (newRadio && newRadio.checked) {
+                console.log('Mode: Nouveau client');
+                if (existingSection) {
+                    existingSection.classList.remove('active');
+                    existingSection.style.display = 'none';
+                }
+                if (newSection) {
+                    newSection.classList.add('active');
+                    newSection.style.display = 'block';
+                }
+                if (customerSelect) customerSelect.required = false;
+                if (customerInfo) customerInfo.style.display = 'none';
+                
+                const nameField = document.getElementById('new_customer_name');
+                const mobileField = document.getElementById('new_customer_mobile');
+                if (nameField) nameField.required = true;
+                if (mobileField) mobileField.required = true;
+            }
+        }
+        
+        // Attacher les événements
+        if (existingRadio) {
+            existingRadio.addEventListener('change', function() {
+                console.log('Radio existant changé');
+                toggleCustomerSections();
+            });
+        }
+        if (newRadio) {
+            newRadio.addEventListener('change', function() {
+                console.log('Radio nouveau changé');
+                toggleCustomerSections();
+            });
+        }
+        
+        // Initialiser l'état au chargement
+        toggleCustomerSections();
+        
+        // Gestion de la sélection de client existant
+        if (customerSelect) {
+            customerSelect.addEventListener('change', function() {
+                console.log('Sélection client changée');
+                const selectedOption = this.options[this.selectedIndex];
+                
+                if (selectedOption.value && customerInfo) {
+                    const customerName = selectedOption.getAttribute('data-name');
+                    const customerContact = selectedOption.getAttribute('data-contact');
+                    const customerEmail = selectedOption.getAttribute('data-email');
+                    
+                    const nameSpan = document.getElementById('selected_name');
+                    const contactSpan = document.getElementById('selected_contact');
+                    const emailSpan = document.getElementById('selected_email');
+                    
+                    if (nameSpan) nameSpan.textContent = customerName || '';
+                    if (contactSpan) contactSpan.textContent = customerContact || '';
+                    if (emailSpan) emailSpan.textContent = customerEmail || 'Non renseigné';
+                    
+                    customerInfo.style.display = 'block';
+                } else if (customerInfo) {
+                    customerInfo.style.display = 'none';
+                }
+            });
+        }
+        
+        // Gestion des échéances dans le formulaire de recherche
+        document.querySelectorAll('.echeance-select').forEach(function(select) {
+            select.addEventListener('change', function() {
+                const customInput = this.parentNode.querySelector('.jours-custom');
+                if (customInput) {
+                    if (this.value === 'personnalise') {
+                        customInput.style.display = 'inline-block';
+                    } else {
+                        customInput.style.display = 'none';
+                    }
+                }
+            });
+        });
+        
+        // Initialiser l'affichage des champs personnalisés au chargement
+        document.querySelectorAll('.echeance-select').forEach(function(select) {
+            const customInput = select.parentNode.querySelector('.jours-custom');
+            if (customInput) {
+                if (select.value === 'personnalise') {
+                    customInput.style.display = 'inline-block';
+                } else {
+                    customInput.style.display = 'none';
+                }
+            }
+        });
+        
+        // Validation du numéro de téléphone
+        const mobileInput = document.getElementById('new_customer_mobile');
+        const nimbaFormats = /^(\+?224)?6[0-9]{8}$/;
+        
+        if (mobileInput) {
+            mobileInput.addEventListener('input', function() {
+                const value = this.value.replace(/[^0-9+]/g, '');
+                this.value = value;
+                
+                if (value && !nimbaFormats.test(value)) {
+                    this.style.borderColor = '#d9534f';
+                    this.title = 'Format invalide. Utilisez: 623XXXXXXXX';
+                } else {
+                    this.style.borderColor = '#28a745';
+                    this.title = 'Format valide';
+                }
+            });
+        }
+        
+        // Validation du formulaire
+        const form = document.querySelector('form[name="submit"]');
+        if (form) {
+            form.addEventListener('submit', function(e) {
+                console.log('Formulaire soumis');
+                const customerTypeRadio = document.querySelector('input[name="customer_type"]:checked');
+                
+                if (customerTypeRadio) {
+                    const customerType = customerTypeRadio.value;
+                    console.log('Type de client:', customerType);
+                    
+                    if (customerType === 'existing') {
+                        const selectedCustomer = customerSelect ? customerSelect.value : '';
+                        if (!selectedCustomer) {
+                            alert('Veuillez sélectionner un client existant');
+                            e.preventDefault();
+                            return false;
+                        }
+                    } else {
+                        const customerName = document.getElementById('new_customer_name');
+                        const mobile = document.getElementById('new_customer_mobile');
+                        
+                        if (!customerName || !customerName.value.trim() || !mobile || !mobile.value.trim()) {
+                            alert('Le nom et le numéro de téléphone sont obligatoires');
+                            e.preventDefault();
+                            return false;
+                        }
+                        
+                        if (!nimbaFormats.test(mobile.value.replace(/[^0-9+]/g, ''))) {
+                            alert('Format de numéro invalide. Utilisez: 623XXXXXXXX');
+                            e.preventDefault();
+                            return false;
+                        }
+                    }
+                } else {
+                    alert('Veuillez sélectionner le type de client');
+                    e.preventDefault();
+                    return false;
+                }
+            });
+        }
+        
+        console.log('✅ Tous les gestionnaires d\'événements installés');
+    });
+    </script>
+</body>
+</html>
