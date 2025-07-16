@@ -1,8 +1,5 @@
 <?php 
 session_start();
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
 error_reporting(E_ALL);
 include('includes/dbconnection.php');
 
@@ -12,127 +9,97 @@ if (empty($_SESSION['imsaid'])) {
     exit;
 }
 
-$success_message = '';
-$error_message = '';
-
-// Ajouter un nouveau client
-if (isset($_POST['add_customer'])) {
-    $name = mysqli_real_escape_string($con, trim($_POST['customer_name']));
-    $mobile = preg_replace('/[^0-9+]/', '', $_POST['customer_mobile']);
-    $email = mysqli_real_escape_string($con, trim($_POST['customer_email']));
-    $address = mysqli_real_escape_string($con, trim($_POST['customer_address']));
-    
-    // Validation
-    if (empty($name) || empty($mobile)) {
-        $error_message = 'Le nom et le numéro de téléphone sont obligatoires';
-    } elseif (!preg_match('/^(\+?224)?6[0-9]{8}$/', $mobile)) {
-        $error_message = 'Format de numéro invalide. Utilisez le format: 623XXXXXXXX';
-    } else {
-        // Vérifier si le client existe déjà
-        $checkQuery = mysqli_query($con, "SELECT ID FROM tblcustomer WHERE CustomerContact='$mobile' LIMIT 1");
-        if (mysqli_num_rows($checkQuery) > 0) {
-            $error_message = 'Un client avec ce numéro de téléphone existe déjà';
-        } else {
-            // Valider l'email si fourni
-            if (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                $error_message = 'Format d\'email invalide';
-            } else {
-                $insertQuery = "INSERT INTO tblcustomer (CustomerName, CustomerContact, CustomerEmail, CustomerAddress, CustomerRegdate) 
-                                VALUES ('$name', '$mobile', '$email', '$address', NOW())";
-                
-                if (mysqli_query($con, $insertQuery)) {
-                    $success_message = 'Client ajouté avec succès';
-                    // Réinitialiser les champs après succès
-                    $_POST = array();
-                } else {
-                    $error_message = 'Erreur lors de l\'ajout du client: ' . mysqli_error($con);
-                }
-            }
-        }
-    }
+// Recherche
+$searchTerm = '';
+$whereClause = '';
+if (!empty($_GET['search'])) {
+    $searchTerm = mysqli_real_escape_string($con, $_GET['search']);
+    $whereClause = "WHERE CustomerName LIKE '%$searchTerm%' OR CustomerContact LIKE '%$searchTerm%' OR CustomerEmail LIKE '%$searchTerm%'";
 }
 
-// Statistiques pour l'affichage
-$totalCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer"))['count'];
-$todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer WHERE DATE(CustomerRegdate) = CURDATE()"))['count'];
+// Pagination
+$page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
+$recordsPerPage = 20;
+$offset = ($page - 1) * $recordsPerPage;
+
+// Compter le total
+$countQuery = "SELECT COUNT(*) as total FROM v_customer_overview $whereClause";
+$countResult = mysqli_query($con, $countQuery);
+$totalRecords = mysqli_fetch_assoc($countResult)['total'];
+$totalPages = ceil($totalRecords / $recordsPerPage);
+
+// Récupérer les clients avec statistiques
+$customersQuery = "SELECT * FROM v_customer_overview $whereClause 
+                   ORDER BY LastPurchaseDate DESC 
+                   LIMIT $offset, $recordsPerPage";
+$customersResult = mysqli_query($con, $customersQuery);
+
+// Statistiques générales
+$stats = mysqli_fetch_assoc(mysqli_query($con, "
+    SELECT 
+        COUNT(*) as total_customers,
+        SUM(TotalPurchases) as total_revenue,
+        SUM(TotalDues) as total_dues,
+        COUNT(CASE WHEN TotalDues > 0 THEN 1 END) as customers_with_dues
+    FROM v_customer_overview
+"));
 ?>
 
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <title>Ajouter un Client | Système de Gestion d'Inventaire</title>
+    <title>Répertoire Client | Système de Gestion d'Inventaire</title>
     <?php include_once('includes/cs.php'); ?>
     <?php include_once('includes/responsive.php'); ?>
     <style>
-        .customer-form {
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
         .customer-stats {
             background-color: #e7f3ff;
             border-left: 4px solid #007bff;
             padding: 15px;
             margin-bottom: 20px;
         }
-        .alert {
-            padding: 15px;
-            margin-bottom: 20px;
-            border: 1px solid transparent;
-            border-radius: 4px;
+        .stat-box {
+            display: inline-block;
+            margin-right: 30px;
         }
-        .alert-success {
-            color: #3c763d;
-            background-color: #dff0d8;
-            border-color: #d6e9c6;
+        .stat-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
         }
-        .alert-danger {
-            color: #a94442;
-            background-color: #f2dede;
-            border-color: #ebccd1;
-        }
-        .form-validation {
-            margin-top: 5px;
+        .stat-label {
             font-size: 12px;
+            color: #666;
         }
-        .validation-error {
+        .customer-actions {
+            white-space: nowrap;
+        }
+        .dues-high {
             color: #d9534f;
+            font-weight: bold;
         }
-        .validation-success {
+        .dues-zero {
             color: #5cb85c;
         }
-        .required {
-            color: #d9534f;
-        }
-        .form-actions {
-            background-color: #f5f5f5;
-            border-top: 1px solid #ddd;
-            border-radius: 0 0 4px 4px;
-            margin: 20px -20px -20px;
-            padding: 19px 20px 20px;
-        }
-        .customer-preview {
-            background-color: #fff;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 15px;
+        .pagination {
+            text-align: center;
             margin-top: 20px;
-            display: none;
         }
-        .preview-title {
-            color: #333;
-            margin-bottom: 10px;
-            font-weight: bold;
-        }
-        .preview-field {
-            margin-bottom: 8px;
-        }
-        .preview-label {
-            font-weight: bold;
+        .pagination a {
             display: inline-block;
-            width: 120px;
+            padding: 8px 16px;
+            margin: 0 4px;
+            text-decoration: none;
+            border: 1px solid #ddd;
+            color: #007bff;
+        }
+        .pagination a.active {
+            background-color: #007bff;
+            color: white;
+            border: 1px solid #007bff;
+        }
+        .pagination a:hover:not(.active) {
+            background-color: #ddd;
         }
     </style>
 </head>
@@ -146,171 +113,173 @@ $todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as coun
                 <a href="dashboard.php" class="tip-bottom">
                     <i class="icon-home"></i> Accueil
                 </a>
-                <a href="manage_customers.php" class="tip-bottom">
-                    <i class="icon-user"></i> Gestion des Clients
-                </a>
-                <a href="add_customer.php" class="current">Ajouter un Client</a>
+                <a href="manage_customer_master.php" class="current">Répertoire Client</a>
             </div>
-            <h1>Ajouter un Nouveau Client</h1>
+            <h1>Répertoire Client</h1>
         </div>
         
         <div class="container-fluid">
-            <!-- Statistiques -->
+            <!-- Statistiques générales -->
             <div class="customer-stats">
-                <i class="icon-user"></i> 
-                <strong>Total des clients :</strong> <?php echo $totalCustomers; ?>
-                <span style="margin-left: 20px;">
-                    <i class="icon-calendar"></i>
-                    <strong>Nouveaux aujourd'hui :</strong> <?php echo $todayCustomers; ?>
-                </span>
+                <div class="stat-box">
+                    <div class="stat-value"><?php echo number_format($stats['total_customers']); ?></div>
+                    <div class="stat-label">Total Clients</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value"><?php echo number_format($stats['total_revenue']); ?> GNF</div>
+                    <div class="stat-label">Chiffre d'Affaires Total</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value"><?php echo number_format($stats['total_dues']); ?> GNF</div>
+                    <div class="stat-label">Créances Totales</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value"><?php echo number_format($stats['customers_with_dues']); ?></div>
+                    <div class="stat-label">Clients avec Créances</div>
+                </div>
             </div>
 
-            <!-- Messages d'alerte -->
-            <?php if (!empty($success_message)): ?>
-            <div class="alert alert-success">
-                <i class="icon-ok"></i> <?php echo $success_message; ?>
-                <a href="manage_customers.php" style="margin-left: 15px;" class="btn btn-small btn-primary">
-                    <i class="icon-list"></i> Voir tous les clients
-                </a>
-            </div>
-            <?php endif; ?>
-
-            <?php if (!empty($error_message)): ?>
-            <div class="alert alert-danger">
-                <i class="icon-remove"></i> <?php echo $error_message; ?>
-            </div>
-            <?php endif; ?>
-
+            <!-- Actions rapides -->
             <div class="row-fluid">
-                <div class="span8">
-                    <!-- Formulaire d'ajout -->
-                    <div class="widget-box">
-                        <div class="widget-title">
-                            <span class="icon"><i class="icon-plus"></i></span>
-                            <h5>Informations du Client</h5>
-                        </div>
-                        <div class="widget-content nopadding">
-                            <div class="customer-form">
-                                <form method="post" class="form-horizontal" id="customerForm">
-                                    <div class="control-group">
-                                        <label class="control-label">Nom Complet <span class="required">*</span></label>
-                                        <div class="controls">
-                                            <input type="text" name="customer_name" id="customer_name" 
-                                                   class="span10" required 
-                                                   value="<?php echo isset($_POST['customer_name']) ? htmlspecialchars($_POST['customer_name']) : ''; ?>"
-                                                   placeholder="Entrez le nom complet du client">
-                                            <div class="form-validation" id="name_validation"></div>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="control-group">
-                                        <label class="control-label">Numéro de Téléphone <span class="required">*</span></label>
-                                        <div class="controls">
-                                            <div class="input-prepend">
-                                                <span class="add-on"><i class="icon-phone"></i></span>
-                                                <input type="tel" name="customer_mobile" id="customer_mobile" 
-                                                       class="span8" required 
-                                                       pattern="^(\+?224)?6[0-9]{8}$" 
-                                                       placeholder="623XXXXXXXX"
-                                                       value="<?php echo isset($_POST['customer_mobile']) ? htmlspecialchars($_POST['customer_mobile']) : ''; ?>">
-                                            </div>
-                                            <div class="form-validation" id="mobile_validation">
-                                                <small class="muted">Format: 623XXXXXXXX (numéros Guinéens)</small>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="control-group">
-                                        <label class="control-label">Adresse Email</label>
-                                        <div class="controls">
-                                            <div class="input-prepend">
-                                                <span class="add-on"><i class="icon-envelope"></i></span>
-                                                <input type="email" name="customer_email" id="customer_email" 
-                                                       class="span8"
-                                                       placeholder="email@exemple.com"
-                                                       value="<?php echo isset($_POST['customer_email']) ? htmlspecialchars($_POST['customer_email']) : ''; ?>">
-                                            </div>
-                                            <div class="form-validation" id="email_validation"></div>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="control-group">
-                                        <label class="control-label">Adresse Physique</label>
-                                        <div class="controls">
-                                            <textarea name="customer_address" id="customer_address" 
-                                                      class="span10" rows="3" 
-                                                      placeholder="Adresse complète du client (optionnel)"><?php echo isset($_POST['customer_address']) ? htmlspecialchars($_POST['customer_address']) : ''; ?></textarea>
-                                            <div class="form-validation" id="address_validation"></div>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="form-actions">
-                                        <button type="submit" name="add_customer" class="btn btn-primary btn-large">
-                                            <i class="icon-ok"></i> Ajouter le Client
-                                        </button>
-                                        <button type="reset" class="btn btn-large" onclick="resetForm()">
-                                            <i class="icon-refresh"></i> Réinitialiser
-                                        </button>
-                                        <a href="manage_customers.php" class="btn btn-large">
-                                            <i class="icon-arrow-left"></i> Retour à la liste
-                                        </a>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="span4">
-                    <!-- Aide et instructions -->
-                    <div class="widget-box">
-                        <div class="widget-title">
-                            <span class="icon"><i class="icon-info-sign"></i></span>
-                            <h5>Instructions</h5>
-                        </div>
-                        <div class="widget-content">
-                            <h6><i class="icon-star"></i> Champs Obligatoires</h6>
-                            <ul>
-                                <li><strong>Nom Complet :</strong> Nom et prénom du client</li>
-                                <li><strong>Téléphone :</strong> Numéro de téléphone guinéen valide</li>
-                            </ul>
-                            
-                            <h6><i class="icon-phone"></i> Format du Téléphone</h6>
-                            <ul>
-                                <li>Format accepté : <code>623XXXXXXXX</code></li>
-                                <li>Avec indicatif : <code>+224623XXXXXXXX</code></li>
-                                <li>Les numéros doivent commencer par 6</li>
-                            </ul>
-                            
-                            <h6><i class="icon-envelope"></i> Email (Optionnel)</h6>
-                            <p>Format email valide requis si renseigné</p>
-                        </div>
-                    </div>
-
-                    <!-- Aperçu du client -->
-                    <div class="customer-preview" id="customerPreview">
-                        <div class="preview-title">
-                            <i class="icon-eye-open"></i> Aperçu du Client
-                        </div>
-                        <div class="preview-field">
-                            <span class="preview-label">Nom :</span>
-                            <span id="preview_name">-</span>
-                        </div>
-                        <div class="preview-field">
-                            <span class="preview-label">Téléphone :</span>
-                            <span id="preview_mobile">-</span>
-                        </div>
-                        <div class="preview-field">
-                            <span class="preview-label">Email :</span>
-                            <span id="preview_email">-</span>
-                        </div>
-                        <div class="preview-field">
-                            <span class="preview-label">Adresse :</span>
-                            <span id="preview_address">-</span>
-                        </div>
-                    </div>
+                <div class="span12">
+                    <a href="add_customer_master.php" class="btn btn-primary">
+                        <i class="icon-plus"></i> Ajouter un Client
+                    </a>
+                    <a href="dettecart.php" class="btn btn-success">
+                        <i class="icon-shopping-cart"></i> Nouvelle Vente
+                    </a>
+                    <a href="manage_customers.php" class="btn btn-info">
+                        <i class="icon-file-text"></i> Historique Factures
+                    </a>
                 </div>
             </div>
+            <hr>
+
+            <!-- Barre de recherche -->
+            <div class="row-fluid">
+                <div class="span12">
+                    <form method="get" class="form-inline">
+                        <div class="input-append">
+                            <input type="text" name="search" value="<?php echo htmlspecialchars($searchTerm); ?>" 
+                                   placeholder="Rechercher par nom, téléphone ou email..." class="span4">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="icon-search"></i> Rechercher
+                            </button>
+                        </div>
+                        <?php if (!empty($searchTerm)): ?>
+                        <a href="manage_customer_master.php" class="btn">
+                            <i class="icon-remove"></i> Effacer
+                        </a>
+                        <?php endif; ?>
+                    </form>
+                </div>
+            </div>
+            <hr>
+
+            <!-- Liste des clients -->
+            <div class="widget-box">
+                <div class="widget-title">
+                    <span class="icon"><i class="icon-th"></i></span>
+                    <h5>Clients (<?php echo $totalRecords; ?>)</h5>
+                </div>
+                <div class="widget-content nopadding">
+                    <table class="table table-bordered table-striped">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Nom</th>
+                                <th>Téléphone</th>
+                                <th>Email</th>
+                                <th>Inscription</th>
+                                <th>Factures</th>
+                                <th>Achats Totaux</th>
+                                <th>Créances</th>
+                                <th>Dernier Achat</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php 
+                            if (mysqli_num_rows($customersResult) > 0) {
+                                $i = $offset + 1;
+                                while ($customer = mysqli_fetch_assoc($customersResult)) {
+                                    $duesClass = $customer['TotalDues'] > 0 ? 'dues-high' : 'dues-zero';
+                                    $lastPurchase = $customer['LastPurchaseDate'] ? 
+                                        date('d/m/Y', strtotime($customer['LastPurchaseDate'])) : 
+                                        'Jamais';
+                                    ?>
+                                    <tr>
+                                        <td><?php echo $i++; ?></td>
+                                        <td><strong><?php echo htmlspecialchars($customer['CustomerName']); ?></strong></td>
+                                        <td><?php echo htmlspecialchars($customer['CustomerContact']); ?></td>
+                                        <td><?php echo htmlspecialchars($customer['CustomerEmail'] ?: '-'); ?></td>
+                                        <td><?php echo date('d/m/Y', strtotime($customer['CustomerRegdate'])); ?></td>
+                                        <td>
+                                            <span class="badge badge-info"><?php echo $customer['TotalInvoices']; ?></span>
+                                        </td>
+                                        <td><?php echo number_format($customer['TotalPurchases']); ?> GNF</td>
+                                        <td class="<?php echo $duesClass; ?>">
+                                            <?php echo number_format($customer['TotalDues']); ?> GNF
+                                        </td>
+                                        <td><?php echo $lastPurchase; ?></td>
+                                        <td class="customer-actions">
+                                            <a href="customer_details.php?id=<?php echo $customer['id']; ?>" 
+                                               class="btn btn-info btn-small" title="Voir détails">
+                                                <i class="icon-eye-open"></i>
+                                            </a>
+                                            <a href="edit_customer_master.php?id=<?php echo $customer['id']; ?>" 
+                                               class="btn btn-warning btn-small" title="Modifier">
+                                                <i class="icon-edit"></i>
+                                            </a>
+                                            <?php if ($customer['TotalInvoices'] == 0): ?>
+                                            <a href="manage_customer_master.php?delete_id=<?php echo $customer['id']; ?>" 
+                                               onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce client ?')" 
+                                               class="btn btn-danger btn-small" title="Supprimer">
+                                                <i class="icon-trash"></i>
+                                            </a>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                    <?php
+                                }
+                            } else {
+                                ?>
+                                <tr>
+                                    <td colspan="10" class="text-center" style="color: red;">
+                                        <?php echo !empty($searchTerm) ? 'Aucun client trouvé pour cette recherche' : 'Aucun client enregistré'; ?>
+                                    </td>
+                                </tr>
+                                <?php
+                            }
+                            ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Pagination -->
+            <?php if ($totalPages > 1): ?>
+            <div class="pagination">
+                <?php if ($page > 1): ?>
+                    <a href="?page=<?php echo $page-1; ?><?php echo !empty($searchTerm) ? '&search='.urlencode($searchTerm) : ''; ?>">&laquo; Précédent</a>
+                <?php endif; ?>
+                
+                <?php
+                $start = max(1, $page - 2);
+                $end = min($totalPages, $page + 2);
+                
+                for ($i = $start; $i <= $end; $i++): ?>
+                    <a href="?page=<?php echo $i; ?><?php echo !empty($searchTerm) ? '&search='.urlencode($searchTerm) : ''; ?>" 
+                       class="<?php echo $i == $page ? 'active' : ''; ?>">
+                        <?php echo $i; ?>
+                    </a>
+                <?php endfor; ?>
+                
+                <?php if ($page < $totalPages): ?>
+                    <a href="?page=<?php echo $page+1; ?><?php echo !empty($searchTerm) ? '&search='.urlencode($searchTerm) : ''; ?>">Suivant &raquo;</a>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -319,131 +288,5 @@ $todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as coun
     <script src="js/jquery.min.js"></script>
     <script src="js/bootstrap.min.js"></script>
     <script src="js/matrix.js"></script>
-    
-    <script>
-        $(document).ready(function() {
-            // Validation en temps réel
-            const phonePattern = /^(\+?224)?6[0-9]{8}$/;
-            const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            
-            // Validation du nom
-            $('#customer_name').on('input blur', function() {
-                const value = $(this).val().trim();
-                const validation = $('#name_validation');
-                
-                if (value.length === 0) {
-                    validation.html('').removeClass('validation-error validation-success');
-                } else if (value.length < 2) {
-                    validation.html('<span class="validation-error">Le nom doit contenir au moins 2 caractères</span>');
-                } else if (!/^[a-zA-ZÀ-ÿ\s]+$/.test(value)) {
-                    validation.html('<span class="validation-error">Le nom ne doit contenir que des lettres</span>');
-                } else {
-                    validation.html('<span class="validation-success">✓ Nom valide</span>');
-                }
-                updatePreview();
-            });
-            
-            // Validation du téléphone
-            $('#customer_mobile').on('input blur', function() {
-                let value = $(this).val().replace(/[^0-9+]/g, '');
-                $(this).val(value);
-                
-                const validation = $('#mobile_validation');
-                
-                if (value.length === 0) {
-                    validation.html('<small class="muted">Format: 623XXXXXXXX (numéros Guinéens)</small>');
-                } else if (!phonePattern.test(value)) {
-                    validation.html('<span class="validation-error">Format invalide. Utilisez: 623XXXXXXXX</span>');
-                } else {
-                    validation.html('<span class="validation-success">✓ Numéro valide</span>');
-                }
-                updatePreview();
-            });
-            
-            // Validation de l'email
-            $('#customer_email').on('input blur', function() {
-                const value = $(this).val().trim();
-                const validation = $('#email_validation');
-                
-                if (value.length === 0) {
-                    validation.html('').removeClass('validation-error validation-success');
-                } else if (!emailPattern.test(value)) {
-                    validation.html('<span class="validation-error">Format d\'email invalide</span>');
-                } else {
-                    validation.html('<span class="validation-success">✓ Email valide</span>');
-                }
-                updatePreview();
-            });
-            
-            // Mise à jour de l'aperçu
-            $('#customer_address').on('input', updatePreview);
-            
-            function updatePreview() {
-                const name = $('#customer_name').val().trim();
-                const mobile = $('#customer_mobile').val().trim();
-                const email = $('#customer_email').val().trim();
-                const address = $('#customer_address').val().trim();
-                
-                $('#preview_name').text(name || '-');
-                $('#preview_mobile').text(mobile || '-');
-                $('#preview_email').text(email || '-');
-                $('#preview_address').text(address || '-');
-                
-                // Afficher l'aperçu si au moins un champ est rempli
-                if (name || mobile || email || address) {
-                    $('#customerPreview').show();
-                } else {
-                    $('#customerPreview').hide();
-                }
-            }
-            
-            // Validation avant soumission
-            $('#customerForm').on('submit', function(e) {
-                const name = $('#customer_name').val().trim();
-                const mobile = $('#customer_mobile').val().trim();
-                const email = $('#customer_email').val().trim();
-                
-                let isValid = true;
-                let errorMessage = '';
-                
-                if (!name) {
-                    errorMessage += 'Le nom est obligatoire.\n';
-                    isValid = false;
-                }
-                
-                if (!mobile) {
-                    errorMessage += 'Le numéro de téléphone est obligatoire.\n';
-                    isValid = false;
-                } else if (!phonePattern.test(mobile)) {
-                    errorMessage += 'Le format du numéro de téléphone est invalide.\n';
-                    isValid = false;
-                }
-                
-                if (email && !emailPattern.test(email)) {
-                    errorMessage += 'Le format de l\'email est invalide.\n';
-                    isValid = false;
-                }
-                
-                if (!isValid) {
-                    alert(errorMessage);
-                    e.preventDefault();
-                    return false;
-                }
-                
-                // Confirmation avant ajout
-                const confirmMessage = `Confirmer l'ajout du client :\n\nNom: ${name}\nTéléphone: ${mobile}\nEmail: ${email || 'Non renseigné'}`;
-                if (!confirm(confirmMessage)) {
-                    e.preventDefault();
-                    return false;
-                }
-            });
-        });
-        
-        function resetForm() {
-            $('#customerPreview').hide();
-            $('.form-validation').html('');
-            $('#mobile_validation').html('<small class="muted">Format: 623XXXXXXXX (numéros Guinéens)</small>');
-        }
-    </script>
 </body>
 </html>
