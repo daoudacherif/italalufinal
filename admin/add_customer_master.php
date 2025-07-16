@@ -324,7 +324,7 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
                                         <button type="reset" class="btn btn-large" onclick="resetForm()">
                                             <i class="icon-refresh"></i> Réinitialiser
                                         </button>
-                                        <a href="manage_customer_master.php" class="btn btn-large">
+                                        <a href="manage_customers.php" class="btn btn-large">
                                             <i class="icon-arrow-left"></i> Retour au répertoire
                                         </a>
                                     </div>
