@@ -27,10 +27,83 @@ if (mysqli_num_rows($resCustomer) == 0) {
 $customerInfo = mysqli_fetch_assoc($resCustomer);
 
 // Fetch recent payments
-$sqlPayments = "SELECT * FROM tblpayments WHERE CustomerID = $customerId ORDER BY PaymentDate DESC LIMIT 5";
+$sqlPayments = "SELECT p.*, 
+                CASE WHEN p.EcheanceId IS NOT NULL THEN 'Échéance' ELSE 'Global' END as TypePaiement
+                FROM tblpayments p 
+                WHERE p.CustomerID = $customerId 
+                ORDER BY p.PaymentDate DESC LIMIT 5";
 $resPayments = mysqli_query($con, $sqlPayments);
 
-// Handle payment submission
+// Fetch échéances for this customer's billing
+$billingNumber = $customerInfo['BillingNumber'];
+$sqlEcheances = "SELECT cc.*, cc.ID as CreditCartID, cc.ProductId, cc.ProductQty, cc.Price, 
+                 cc.DateEcheance, cc.TypeEcheance, cc.StatutEcheance, cc.NombreJours,
+                 CASE 
+                   WHEN cc.DateEcheance IS NOT NULL AND cc.DateEcheance < CURDATE() AND cc.StatutEcheance != 'regle' THEN 'en_retard'
+                   ELSE cc.StatutEcheance 
+                 END as StatutActuel,
+                 DATEDIFF(cc.DateEcheance, CURDATE()) as JoursRestants
+                 FROM tblcreditcart cc 
+                 WHERE cc.BillingId = '$billingNumber' AND cc.IsCheckOut = 1
+                 ORDER BY cc.DateEcheance ASC, cc.ID ASC";
+$resEcheances = mysqli_query($con, $sqlEcheances);
+
+// Handle échéance payment
+if (isset($_POST['payEcheance'])) {
+    $creditCartId = intval($_POST['creditCartId']);
+    $paymentMethod = isset($_POST['paymentMethod']) ? $_POST['paymentMethod'] : 'Cash';
+    $reference = isset($_POST['reference']) ? $_POST['reference'] : null;
+    $comments = isset($_POST['comments']) ? $_POST['comments'] : null;
+
+    // Get échéance details
+    $sqlEcheanceDetail = "SELECT * FROM tblcreditcart WHERE ID = $creditCartId LIMIT 1";
+    $resEcheanceDetail = mysqli_query($con, $sqlEcheanceDetail);
+    $echeanceInfo = mysqli_fetch_assoc($resEcheanceDetail);
+    
+    $echeanceAmount = intval(floatval($echeanceInfo['Price']) * intval($echeanceInfo['ProductQty']));
+
+    // Begin transaction
+    mysqli_begin_transaction($con);
+    try {
+        // 1. Update échéance status
+        $updateEcheance = "UPDATE tblcreditcart 
+                          SET StatutEcheance = 'regle' 
+                          WHERE ID = '$creditCartId'";
+        mysqli_query($con, $updateEcheance);
+
+        // 2. Update customer amounts
+        $oldPaid = intval($customerInfo['Paid']);
+        $oldDues = intval($customerInfo['Dues']);
+        
+        $newPaid = $oldPaid + $echeanceAmount;
+        $newDues = $oldDues - $echeanceAmount;
+        if ($newDues < 0) $newDues = 0;
+
+        $updateCustomer = "UPDATE tblcustomer 
+                          SET Paid='$newPaid', Dues='$newDues'
+                          WHERE ID='$customerId'";
+        mysqli_query($con, $updateCustomer);
+
+        // 3. Insert payment record
+        $insertPayment = "INSERT INTO tblpayments 
+                         (CustomerID, BillingNumber, PaymentAmount, PaymentMethod, ReferenceNumber, Comments, EcheanceId) 
+                         VALUES 
+                         ('$customerId', '$billingNumber', '$echeanceAmount', '$paymentMethod', '$reference', '$comments', '$creditCartId')";
+        mysqli_query($con, $insertPayment);
+
+        mysqli_commit($con);
+        echo "<script>
+            alert('Paiement d\\'échéance enregistré avec succès !');
+            window.location.href = 'make-payment.php?id=$customerId';
+        </script>";
+        exit;
+    } catch (Exception $e) {
+        mysqli_rollback($con);
+        echo "<script>alert('Erreur lors du paiement de l\\'échéance: " . $e->getMessage() . "');</script>";
+    }
+}
+
+// Handle regular payment submission
 if (isset($_POST['submitPayment'])) {
     $payAmount = intval($_POST['payAmount']);
     $paymentMethod = isset($_POST['paymentMethod']) ? $_POST['paymentMethod'] : 'Cash';
@@ -45,13 +118,10 @@ if (isset($_POST['submitPayment'])) {
         // Calculate new amounts
         $oldPaid = intval($customerInfo['Paid']);
         $oldDues = intval($customerInfo['Dues']);
-        $billingNumber = $customerInfo['BillingNumber'];
 
         $newPaid = $oldPaid + $payAmount;
         $newDues = $oldDues - $payAmount;
-        if ($newDues < 0) {
-            $newDues = 0; // cannot go below zero
-        }
+        if ($newDues < 0) $newDues = 0;
 
         // Begin transaction
         mysqli_begin_transaction($con);
@@ -69,7 +139,6 @@ if (isset($_POST['submitPayment'])) {
                              ('$customerId', '$billingNumber', '$payAmount', '$paymentMethod', '$reference', '$comments')";
             mysqli_query($con, $insertPayment);
 
-            // Commit the transaction
             mysqli_commit($con);
             echo "<script>
                 alert('Paiement enregistré avec succès !');
@@ -77,10 +146,34 @@ if (isset($_POST['submitPayment'])) {
             </script>";
             exit;
         } catch (Exception $e) {
-            // Rollback in case of error
             mysqli_rollback($con);
             echo "<script>alert('Erreur lors de l\\'enregistrement du paiement: " . $e->getMessage() . "');</script>";
         }
+    }
+}
+
+// Function to get status badge
+function getStatusBadge($statut) {
+    switch($statut) {
+        case 'regle': return '<span class="label label-success">Réglé</span>';
+        case 'en_retard': return '<span class="label label-important">En retard</span>';
+        case 'echu': return '<span class="label label-warning">Échu</span>';
+        case 'en_cours': return '<span class="label label-info">En cours</span>';
+        default: return '<span class="label">' . $statut . '</span>';
+    }
+}
+
+// Function to get type échéance
+function getTypeEcheance($type) {
+    switch($type) {
+        case 'immediat': return 'Immédiat';
+        case '7_jours': return '7 jours';
+        case '15_jours': return '15 jours';
+        case '30_jours': return '30 jours';
+        case '60_jours': return '60 jours';
+        case '90_jours': return '90 jours';
+        case 'personnalise': return 'Personnalisé';
+        default: return $type;
     }
 }
 ?>
@@ -104,17 +197,39 @@ if (isset($_POST['submitPayment'])) {
             padding: 20px;
             margin-bottom: 20px;
         }
-        .payment-method-cash {
-            background-color: #dff0d8;
+        .echeance-item {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 10px;
+            background-color: #fff;
         }
-        .payment-method-card {
-            background-color: #d9edf7;
+        .echeance-en-retard {
+            border-left: 4px solid #d9534f;
+            background-color: #f2dede;
         }
-        .payment-method-transfer {
+        .echeance-echu {
+            border-left: 4px solid #f0ad4e;
             background-color: #fcf8e3;
         }
-        .payment-method-mobile {
-            background-color: #f2dede;
+        .echeance-en-cours {
+            border-left: 4px solid #5bc0de;
+            background-color: #d9edf7;
+        }
+        .echeance-regle {
+            border-left: 4px solid #5cb85c;
+            background-color: #dff0d8;
+        }
+        .payment-method-cash { background-color: #dff0d8; }
+        .payment-method-card { background-color: #d9edf7; }
+        .payment-method-transfer { background-color: #fcf8e3; }
+        .payment-method-mobile { background-color: #f2dede; }
+        .echeance-summary {
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
         }
     </style>
 </head>
@@ -170,14 +285,164 @@ if (isset($_POST['submitPayment'])) {
         </div>
       </div>
     </div>
+
+    <!-- Échéances Summary -->
+    <?php 
+    // Calculate échéances summary
+    $totalEcheances = 0;
+    $echeancesEnRetard = 0;
+    $echeancesEnCours = 0;
+    $echeancesReglees = 0;
+    $montantTotal = 0;
+    $montantEnRetard = 0;
+    
+    if (mysqli_num_rows($resEcheances) > 0) {
+        mysqli_data_seek($resEcheances, 0); // Reset result pointer
+        while ($echeance = mysqli_fetch_assoc($resEcheances)) {
+            $totalEcheances++;
+            $montant = floatval($echeance['Price']) * intval($echeance['ProductQty']);
+            $montantTotal += $montant;
+            
+            $statut = $echeance['StatutActuel'];
+            switch($statut) {
+                case 'en_retard':
+                    $echeancesEnRetard++;
+                    $montantEnRetard += $montant;
+                    break;
+                case 'en_cours':
+                    $echeancesEnCours++;
+                    break;
+                case 'regle':
+                    $echeancesReglees++;
+                    break;
+            }
+        }
+        mysqli_data_seek($resEcheances, 0); // Reset again for display
+    ?>
     
     <div class="row-fluid">
-      <!-- Payment Form -->
+      <div class="span12">
+        <div class="echeance-summary">
+          <h4><i class="icon-calendar"></i> Résumé des Échéances</h4>
+          <div class="row-fluid">
+            <div class="span3">
+              <strong>Total Échéances :</strong> <?php echo $totalEcheances; ?>
+            </div>
+            <div class="span3">
+              <strong>En retard :</strong> <span class="text-error"><?php echo $echeancesEnRetard; ?></span>
+            </div>
+            <div class="span3">
+              <strong>En cours :</strong> <span class="text-info"><?php echo $echeancesEnCours; ?></span>
+            </div>
+            <div class="span3">
+              <strong>Réglées :</strong> <span class="text-success"><?php echo $echeancesReglees; ?></span>
+            </div>
+          </div>
+          <div class="row-fluid" style="margin-top: 10px;">
+            <div class="span6">
+              <strong>Montant total des échéances :</strong> <?php echo number_format($montantTotal, 0); ?> CFA
+            </div>
+            <div class="span6">
+              <strong>Montant en retard :</strong> <span class="text-error"><?php echo number_format($montantEnRetard, 0); ?> CFA</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <?php } ?>
+    
+    <!-- Échéances List -->
+    <?php if (mysqli_num_rows($resEcheances) > 0) { ?>
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="widget-box">
+          <div class="widget-title">
+            <span class="icon"><i class="icon-calendar"></i></span>
+            <h5>Gestion des Échéances</h5>
+          </div>
+          <div class="widget-content">
+              <?php 
+              mysqli_data_seek($resEcheances, 0); // Reset result pointer for display
+              while ($echeance = mysqli_fetch_assoc($resEcheances)) { 
+                $montantEcheance = floatval($echeance['Price']) * intval($echeance['ProductQty']);
+                $statut = $echeance['StatutActuel'];
+                $cssClass = 'echeance-' . str_replace('_', '-', $statut);
+              ?>
+              <div class="echeance-item <?php echo $cssClass; ?>">
+                <div class="row-fluid">
+                  <div class="span8">
+                    <div class="row-fluid">
+                      <div class="span6">
+                        <strong>Produit ID :</strong> <?php echo $echeance['ProductId']; ?><br>
+                        <strong>Quantité :</strong> <?php echo $echeance['ProductQty']; ?><br>
+                        <strong>Prix unitaire :</strong> <?php echo number_format($echeance['Price'], 0); ?> CFA<br>
+                        <strong>Montant total :</strong> <span class="text-primary"><?php echo number_format($montantEcheance, 0); ?> CFA</span>
+                      </div>
+                      <div class="span6">
+                        <strong>Type :</strong> <?php echo getTypeEcheance($echeance['TypeEcheance']); ?><br>
+                        <strong>Date échéance :</strong> 
+                        <?php 
+                        if ($echeance['DateEcheance']) {
+                          echo date('d/m/Y', strtotime($echeance['DateEcheance']));
+                          if ($echeance['JoursRestants'] !== null) {
+                            if ($echeance['JoursRestants'] < 0) {
+                              echo ' <span class="text-error">(' . abs($echeance['JoursRestants']) . ' jours de retard)</span>';
+                            } else if ($echeance['JoursRestants'] == 0) {
+                              echo ' <span class="text-warning">(Aujourd\'hui)</span>';
+                            } else {
+                              echo ' <span class="text-info">(dans ' . $echeance['JoursRestants'] . ' jours)</span>';
+                            }
+                          }
+                        } else {
+                          echo 'Non définie';
+                        }
+                        ?><br>
+                        <strong>Statut :</strong> <?php echo getStatusBadge($statut); ?>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="span4" style="text-align: right;">
+                    <h4><?php echo number_format($montantEcheance, 0); ?> CFA</h4>
+                    <?php if ($statut != 'regle') { ?>
+                    <form method="post" style="margin-top: 10px;">
+                      <input type="hidden" name="creditCartId" value="<?php echo $echeance['CreditCartID']; ?>">
+                      <div class="input-append">
+                        <select name="paymentMethod" class="span8">
+                          <option value="Cash">Espèces</option>
+                          <option value="Card">Carte</option>
+                          <option value="Transfer">Virement</option>
+                          <option value="Mobile">Mobile</option>
+                        </select>
+                      </div>
+                      <div style="margin-top: 5px;">
+                        <input type="text" name="reference" placeholder="Référence" class="span8">
+                      </div>
+                      <div style="margin-top: 5px;">
+                        <button type="submit" name="payEcheance" class="btn btn-success btn-small">
+                          <i class="icon-check"></i> Payer
+                        </button>
+                      </div>
+                    </form>
+                    <?php } else { ?>
+                      <p class="text-success"><i class="icon-ok"></i> Payé</p>
+                    <?php } ?>
+                  </div>
+                </div>
+              </div>
+              <?php } ?>
+          </div>
+        </div>
+      </div>
+    </div>
+    <?php } ?>
+    
+    <div class="row-fluid">
+      <!-- Regular Payment Form -->
       <div class="span6">
         <div class="widget-box">
           <div class="widget-title">
             <span class="icon"><i class="icon-money"></i></span>
-            <h5>Effectuer un Paiement</h5>
+            <h5>Paiement Global</h5>
           </div>
           <div class="widget-content">
             <?php if ($customerInfo['Dues'] <= 0) { ?>
@@ -189,8 +454,8 @@ if (isset($_POST['submitPayment'])) {
                 <div class="control-group">
                   <label class="control-label">Montant du Paiement :</label>
                   <div class="controls">
-                    <input type="number" name="payAmount" step="1" min="1" max="<?php echo $customerInfo['Dues']; ?>" value="<?php echo $customerInfo['Dues']; ?>" class="span8" required />
-                    <span class="help-block">Montant maximum : <?php echo number_format($customerInfo['Dues'], 0); ?></span>
+                    <input type="number" name="payAmount" step="1" min="1" max="<?php echo intval($customerInfo['Dues']); ?>" value="<?php echo intval($customerInfo['Dues']); ?>" class="span8" required />
+                    <span class="help-block">Montant maximum : <?php echo number_format($customerInfo['Dues'], 0); ?> CFA</span>
                   </div>
                 </div>
                 
@@ -249,6 +514,7 @@ if (isset($_POST['submitPayment'])) {
                   <th>Montant</th>
                   <th>Méthode</th>
                   <th>Référence</th>
+                  <th>Type</th>
                 </tr>
               </thead>
               <tbody>
@@ -268,13 +534,18 @@ if (isset($_POST['submitPayment'])) {
                   <td><?php echo number_format($payment['PaymentAmount'], 0); ?></td>
                   <td><?php echo $payment['PaymentMethod']; ?></td>
                   <td><?php echo $payment['ReferenceNumber'] ? $payment['ReferenceNumber'] : '-'; ?></td>
+                  <td>
+                    <?php 
+                    echo $payment['TypePaiement'];
+                    ?>
+                  </td>
                 </tr>
                 <?php
                   }
                 } else {
                 ?>
                 <tr>
-                  <td colspan="4" style="text-align: center;">Aucun paiement enregistré</td>
+                  <td colspan="5" style="text-align: center;">Aucun paiement enregistré</td>
                 </tr>
                 <?php } ?>
               </tbody>
@@ -302,5 +573,19 @@ if (isset($_POST['submitPayment'])) {
 <script src="js/jquery.uniform.js"></script>
 <script src="js/select2.min.js"></script>
 <script src="js/matrix.js"></script>
+
+<script>
+$(document).ready(function() {
+    // Confirmation pour les paiements d'échéances
+    $('form').on('submit', function(e) {
+        if ($(this).find('input[name="creditCartId"]').length > 0) {
+            var montant = $(this).closest('.echeance-item').find('h4').text();
+            if (!confirm('Confirmer le paiement de l\'échéance de ' + montant + ' ?')) {
+                e.preventDefault();
+            }
+        }
+    });
+});
+</script>
 </body>
 </html>
