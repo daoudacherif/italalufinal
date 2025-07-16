@@ -105,6 +105,86 @@ function sendSmsNotification($to, $message) {
     }
 }
 
+/**
+ * Create or get customer master ID for billing
+ */
+function createOrGetCustomerMaster($con, $customerName, $mobileNumber, $email = null, $address = null) {
+    // Clean the input
+    $cleanMobile = preg_replace('/[^0-9+]/', '', $mobileNumber);
+    $cleanName = mysqli_real_escape_string($con, trim($customerName));
+    $cleanEmail = !empty($email) ? mysqli_real_escape_string($con, trim($email)) : null;
+    $cleanAddress = !empty($address) ? mysqli_real_escape_string($con, trim($address)) : null;
+    
+    // Check if customer already exists in master table
+    $checkQuery = mysqli_query($con, "
+        SELECT id FROM tblcustomer_master 
+        WHERE CustomerContact = '$cleanMobile' 
+        LIMIT 1
+    ");
+    
+    if (mysqli_num_rows($checkQuery) > 0) {
+        // Customer exists, return the ID
+        $customer = mysqli_fetch_assoc($checkQuery);
+        
+        // Update last purchase date and email/address if provided
+        $updateQuery = "UPDATE tblcustomer_master 
+                       SET LastPurchaseDate = NOW()";
+        if ($cleanEmail) {
+            $updateQuery .= ", CustomerEmail = '$cleanEmail'";
+        }
+        if ($cleanAddress) {
+            $updateQuery .= ", CustomerAddress = '$cleanAddress'";
+        }
+        $updateQuery .= " WHERE id = '{$customer['id']}'";
+        mysqli_query($con, $updateQuery);
+        
+        return $customer['id'];
+    } else {
+        // Customer doesn't exist, create new record
+        $insertQuery = "
+            INSERT INTO tblcustomer_master 
+            (CustomerName, CustomerContact, CustomerEmail, CustomerAddress, CustomerRegdate, LastPurchaseDate) 
+            VALUES ('$cleanName', '$cleanMobile', " . 
+            ($cleanEmail ? "'$cleanEmail'" : "NULL") . ", " .
+            ($cleanAddress ? "'$cleanAddress'" : "NULL") . ", NOW(), NOW())
+        ";
+        
+        if (mysqli_query($con, $insertQuery)) {
+            return mysqli_insert_id($con);
+        } else {
+            error_log("Failed to create customer master record: " . mysqli_error($con));
+            return null;
+        }
+    }
+}
+
+/**
+ * Update customer master statistics after billing
+ */
+function updateCustomerMasterStats($con, $customerMasterId) {
+    $updateQuery = "
+        UPDATE tblcustomer_master cm
+        SET 
+            TotalPurchases = COALESCE((
+                SELECT SUM(FinalAmount) 
+                FROM tblcustomer 
+                WHERE customer_master_id = cm.id
+            ), 0),
+            TotalDues = COALESCE((
+                SELECT SUM(Dues) 
+                FROM tblcustomer 
+                WHERE customer_master_id = cm.id
+            ), 0),
+            LastPurchaseDate = COALESCE((
+                SELECT MAX(BillingDate) 
+                FROM tblcustomer 
+                WHERE customer_master_id = cm.id
+            ), cm.LastPurchaseDate)
+        WHERE cm.id = '$customerMasterId'
+    ";
+    mysqli_query($con, $updateQuery);
+}
+
 // ----------- Gestion Panier -----------
 
 // Ajout au panier
@@ -208,28 +288,28 @@ while ($row = mysqli_fetch_assoc($productQuery)) {
     $productNames[] = $row['ProductName'];
 }
 
-// Récupérer la liste des clients existants
+// Récupérer la liste des clients existants depuis tblcustomer_master
 $existingCustomers = [];
-$customerQuery = mysqli_query($con, "SELECT id, CustomerName, CustomerContact, CustomerEmail FROM tblcustomer ORDER BY CustomerName");
+$customerQuery = mysqli_query($con, "SELECT id, CustomerName, CustomerContact, CustomerEmail FROM tblcustomer_master WHERE Status = 'active' ORDER BY CustomerName");
 while ($row = mysqli_fetch_assoc($customerQuery)) {
     $existingCustomers[] = $row;
 }
 
-// Checkout + Facturation - VERSION AVEC GESTION DES CLIENTS
+// Checkout + Facturation - VERSION AVEC GESTION DES CLIENTS MASTER
 if (isset($_POST['submit'])) {
     $customerType = $_POST['customer_type']; // 'existing' ou 'new'
     $custname = '';
     $custmobile = '';
     $custemail = '';
     $custaddress = '';
-    $selectedCustomerId = null;
+    $customerMasterId = null;
     
     if ($customerType === 'existing') {
         // Client existant sélectionné
-        $selectedCustomerId = intval($_POST['existing_customer']);
+        $customerMasterId = intval($_POST['existing_customer']);
         
-        // Récupérer les infos du client
-        $customerInfo = mysqli_query($con, "SELECT CustomerName, CustomerContact, CustomerEmail, CustomerAddress FROM tblcustomer WHERE id='$selectedCustomerId'");
+        // Récupérer les infos du client master
+        $customerInfo = mysqli_query($con, "SELECT CustomerName, CustomerContact, CustomerEmail, CustomerAddress FROM tblcustomer_master WHERE id='$customerMasterId'");
         if ($customerData = mysqli_fetch_assoc($customerInfo)) {
             $custname = $customerData['CustomerName'];
             $custmobile = $customerData['CustomerContact'];
@@ -258,15 +338,10 @@ if (isset($_POST['submit'])) {
             exit;
         }
         
-        // Créer le nouveau client dans tblcustomer
-        $insertNewCustomer = mysqli_query($con, "
-            INSERT INTO tblcustomer (CustomerName, CustomerContact, CustomerEmail, CustomerAddress, CustomerRegdate)
-            VALUES ('$custname', '$custmobile', '$custemail', '$custaddress', NOW())
-        ");
+        // Créer ou obtenir le client master
+        $customerMasterId = createOrGetCustomerMaster($con, $custname, $custmobile, $custemail, $custaddress);
         
-        if ($insertNewCustomer) {
-            $selectedCustomerId = mysqli_insert_id($con);
-        } else {
+        if (!$customerMasterId) {
             echo "<script>alert('Erreur lors de la création du client'); window.location='dettecart.php';</script>";
             exit;
         }
@@ -328,51 +403,36 @@ if (isset($_POST['submit'])) {
             $dateEcheance = date('Y-m-d', strtotime('+30 days'));
         }
 
-        // 1. Update cart with billing number and date d'échéance
-        $updateCartQuery = "UPDATE tblcreditcart SET BillingId='$billingnum', IsCheckOut=1";
-        if ($dateEcheance) {
-            $updateCartQuery .= ", DateEcheance='$dateEcheance'";
-        }
-        $updateCartQuery .= " WHERE IsCheckOut=0";
-        
-        $updateCart = mysqli_query($con, $updateCartQuery);
+        // 1. Update cart with billing number
+        $updateCart = mysqli_query($con, "UPDATE tblcreditcart SET BillingId='$billingnum', IsCheckOut=1 WHERE IsCheckOut=0");
         if (!$updateCart) throw new Exception('Failed to update cart');
         
-        // 2. Update existing customer record with billing info
-        $updateCustomerQuery = "
-            UPDATE tblcustomer SET 
-                BillingNumber='$billingnum', 
-                ModeOfPayment='$modepayment', 
-                BillingDate=NOW(), 
-                FinalAmount='$netTotal', 
-                Paid='$paidNow', 
-                Dues='$dues'";
+        // 2. Insert customer billing record WITH customer_master_id link
+        $insertCustomerQuery = "
+            INSERT INTO tblcustomer(
+                BillingNumber, CustomerName, MobileNumber, ModeOfPayment, 
+                BillingDate, FinalAmount, Paid, Dues, customer_master_id
+            )
+            VALUES(
+                '$billingnum', '$custname', '$custmobile', '$modepayment', 
+                NOW(), '$netTotal', '$paidNow', '$dues', '$customerMasterId'
+            )
+        ";
         
-        // Ajouter la date d'échéance et le statut de recouvrement si applicable
-        if ($dateEcheance) {
-            $updateCustomerQuery .= ", DateEcheance='$dateEcheance'";
-        }
+        $insertCustomer = mysqli_query($con, $insertCustomerQuery);
+        if (!$insertCustomer) throw new Exception('Failed to insert customer record');
         
-        // Définir le statut de recouvrement initial
-        if ($dues > 0) {
-            $updateCustomerQuery .= ", StatutRecouvrement='EN_COURS', NombreRelances=0";
-        } else {
-            $updateCustomerQuery .= ", StatutRecouvrement='REGLE'";
-        }
-        
-        $updateCustomerQuery .= " WHERE id='$selectedCustomerId'";
-        
-        $updateCustomer = mysqli_query($con, $updateCustomerQuery);
-        if (!$updateCustomer) throw new Exception('Failed to update customer record');
+        // Get the billing record ID
+        $billingRecordId = mysqli_insert_id($con);
         
         // 3. Insert payment record ONLY if there was an actual payment
         if ($paidNow > 0) {
-            $paymentReference = "INV-$billingnum-INITIAL"; // Generate a reference for initial payment
+            $paymentReference = "INV-$billingnum-INITIAL";
             $paymentComments = "Paiement initial lors de la facturation";
             
             $insertPayment = mysqli_query($con, "
                 INSERT INTO tblpayments(CustomerID, BillingNumber, PaymentAmount, PaymentDate, PaymentMethod, ReferenceNumber, Comments)
-                VALUES('$selectedCustomerId', '$billingnum', '$paidNow', NOW(), '$modepayment', '$paymentReference', '$paymentComments')
+                VALUES('$billingRecordId', '$billingnum', '$paidNow', NOW(), '$modepayment', '$paymentReference', '$paymentComments')
             ");
             if (!$insertPayment) throw new Exception('Failed to insert payment record');
         }
@@ -382,10 +442,12 @@ if (isset($_POST['submit'])) {
             UPDATE tblproducts p
             JOIN tblcreditcart c ON p.ID = c.ProductId
             SET p.Stock = p.Stock - c.ProductQty
-            WHERE c.BillingId='$billingnum'
-              AND c.IsCheckOut = 1
+            WHERE c.BillingId='$billingnum' AND c.IsCheckOut = 1
         ");
         if (!$updateStock) throw new Exception('Failed to update stock');
+        
+        // 5. Update customer master statistics
+        updateCustomerMasterStats($con, $customerMasterId);
         
         // Commit transaction
         mysqli_commit($con);
@@ -440,7 +502,7 @@ if (isset($_POST['submit'])) {
         }
 
         // Afficher le message simple
-        echo "<script>alert(" . json_encode("Facture créée: $billingnum$paymentInfo$smsStatusMessage") . "); window.location='invoice_dettecard.php?print=auto';</script>";
+        echo "<script>alert(" . json_encode("Facture créée: $billingnum - Client lié au répertoire$paymentInfo$smsStatusMessage") . "); window.location='invoice_dettecard.php?print=auto';</script>";
         exit;
         
     } catch (Exception $e) {
@@ -631,8 +693,8 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             <!-- Lien vers la gestion des clients -->
             <div class="manage-customers-link">
                 <i class="icon-user"></i>
-                <a href="manage_customers.php" target="_blank">
-                    Gérer les Clients (Ajouter, Modifier, Supprimer)
+                <a href="add_customer_master.php" target="_blank">
+                    Gérer le Répertoire Client (Ajouter, Modifier, Supprimer)
                 </a>
                 - Ouvrir dans un nouvel onglet pour créer ou modifier des clients
             </div>
