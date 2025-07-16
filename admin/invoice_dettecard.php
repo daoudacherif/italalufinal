@@ -7,30 +7,6 @@ if (strlen($_SESSION['imsaid']==0)) {
 } else {
   // Créer une variable pour l'impression automatique
   $printAutomatically = isset($_GET['print']) && $_GET['print'] == 'auto';
-  
-  // Functions pour les échéances
-  function getStatusBadge($statut) {
-    switch($statut) {
-        case 'regle': return '<span class="label label-success">Réglé</span>';
-        case 'en_retard': return '<span class="label label-important">En retard</span>';
-        case 'echu': return '<span class="label label-warning">Échu</span>';
-        case 'en_cours': return '<span class="label label-info">En cours</span>';
-        default: return '<span class="label">' . $statut . '</span>';
-    }
-  }
-
-  function getTypeEcheance($type) {
-    switch($type) {
-        case 'immediat': return 'Immédiat';
-        case '7_jours': return '7 jours';
-        case '15_jours': return '15 jours';
-        case '30_jours': return '30 jours';
-        case '60_jours': return '60 jours';
-        case '90_jours': return '90 jours';
-        case 'personnalise': return 'Personnalisé';
-        default: return $type;
-    }
-  }
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -152,67 +128,6 @@ if (strlen($_SESSION['imsaid']==0)) {
   .payment-label {
     font-weight: bold;
     color: #856404;
-  }
-
-  /* Styles pour les échéances */
-  .echeances-section {
-    background-color: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-    padding: 15px;
-    margin: 20px 0;
-  }
-  
-  .echeances-header {
-    border-bottom: 1px solid #ddd;
-    padding-bottom: 10px;
-    margin-bottom: 15px;
-  }
-  
-  .echeance-item {
-    background-color: white;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 10px;
-    margin-bottom: 10px;
-    border-left: 4px solid #dee2e6;
-  }
-  
-  .echeance-en-retard {
-    border-left-color: #dc3545 !important;
-    background-color: #f8d7da;
-  }
-  
-  .echeance-echu {
-    border-left-color: #ffc107 !important;
-    background-color: #fff3cd;
-  }
-  
-  .echeance-en-cours {
-    border-left-color: #17a2b8 !important;
-    background-color: #d1ecf1;
-  }
-  
-  .echeance-regle {
-    border-left-color: #28a745 !important;
-    background-color: #d4edda;
-  }
-  
-  .echeance-summary {
-    background-color: #e9ecef;
-    padding: 10px;
-    border-radius: 4px;
-    margin-bottom: 15px;
-  }
-  
-  .summary-stat {
-    display: inline-block;
-    margin-right: 20px;
-    font-size: 12px;
-  }
-  
-  .summary-stat strong {
-    color: #495057;
   }
 
   /* Styles pour les signatures */
@@ -365,28 +280,6 @@ if (strlen($_SESSION['imsaid']==0)) {
       font-weight: bold !important;
     }
     
-    /* Styles d'impression pour les échéances */
-    .echeances-section {
-      background-color: transparent !important;
-      border: 1px solid #000 !important;
-      page-break-inside: avoid;
-    }
-    
-    .echeance-item {
-      background-color: transparent !important;
-      border: 1px solid #ccc !important;
-      margin-bottom: 5px !important;
-    }
-    
-    .echeance-en-retard {
-      border-left: 3px solid #000 !important;
-    }
-    
-    .echeance-summary {
-      background-color: transparent !important;
-      border: 1px dashed #000 !important;
-    }
-    
     /* Styles d'impression pour les signatures */
     .signature-section {
       margin-top: 30px !important;
@@ -509,140 +402,36 @@ if (strlen($_SESSION['imsaid']==0)) {
           <!-- Informations de paiement à terme -->
           <div class="dues-info">
             <div class="row-fluid">
-              <div class="span4">
+              <div class="span3">
                 <span class="payment-label">Montant total:</span> 
                 <span class="payment-value"><?php echo number_format($finalAmount, 2); ?> GNF</span>
               </div>
-              <div class="span4">
+              <div class="span3">
                 <span class="payment-label">Montant payé:</span> 
                 <span class="payment-value"><?php echo number_format($paidAmount, 2); ?> GNF</span>
               </div>
-              <div class="span4">
+              <div class="span3">
                 <span class="payment-label">Reste à payer:</span> 
                 <span class="payment-value"><?php echo number_format($duesAmount, 2); ?> GNF</span>
               </div>
-            </div>
-          </div>
-          <?php } ?>
-          
-          <!-- Section des Échéances -->
-          <?php
-          // Récupérer les échéances pour cette facture
-          $sqlEcheances = "SELECT cc.*, cc.ID as CreditCartID, cc.ProductId, cc.ProductQty, cc.Price, 
-                           cc.DateEcheance, cc.TypeEcheance, cc.StatutEcheance, cc.NombreJours,
-                           CASE 
-                             WHEN cc.DateEcheance IS NOT NULL AND cc.DateEcheance < CURDATE() AND cc.StatutEcheance != 'regle' THEN 'en_retard'
-                             ELSE cc.StatutEcheance 
-                           END as StatutActuel,
-                           DATEDIFF(cc.DateEcheance, CURDATE()) as JoursRestants,
-                           p.ProductName
-                           FROM tblcreditcart cc 
-                           LEFT JOIN tblproducts p ON cc.ProductId = p.ID
-                           WHERE cc.BillingId = '$billingid' AND cc.IsCheckOut = 1
-                           ORDER BY cc.DateEcheance ASC, cc.ID ASC";
-          $resEcheances = mysqli_query($con, $sqlEcheances);
-          
-          if (mysqli_num_rows($resEcheances) > 0) {
-            // Calculer le résumé des échéances
-            $totalEcheances = 0;
-            $echeancesEnRetard = 0;
-            $echeancesEnCours = 0;
-            $echeancesReglees = 0;
-            $montantTotal = 0;
-            $montantEnRetard = 0;
-            
-            // Premier passage pour calculer les statistiques
-            $echeancesData = [];
-            while ($echeance = mysqli_fetch_assoc($resEcheances)) {
-                $echeancesData[] = $echeance;
-                $totalEcheances++;
-                $montant = floatval($echeance['Price']) * intval($echeance['ProductQty']);
-                $montantTotal += $montant;
-                
-                $statut = $echeance['StatutActuel'];
-                switch($statut) {
-                    case 'en_retard':
-                        $echeancesEnRetard++;
-                        $montantEnRetard += $montant;
-                        break;
-                    case 'en_cours':
-                        $echeancesEnCours++;
-                        break;
-                    case 'regle':
-                        $echeancesReglees++;
-                        break;
+              <div class="span3">
+                <?php
+                // Récupérer la date d'échéance principale
+                $sqlEcheance = "SELECT DateEcheance FROM tblcreditcart 
+                               WHERE BillingId = '$billingid' AND IsCheckOut = 1 
+                               AND DateEcheance IS NOT NULL 
+                               ORDER BY DateEcheance ASC LIMIT 1";
+                $resEcheance = mysqli_query($con, $sqlEcheance);
+                if (mysqli_num_rows($resEcheance) > 0) {
+                  $echeanceRow = mysqli_fetch_assoc($resEcheance);
+                  $dateEcheance = $echeanceRow['DateEcheance'];
+                  echo '<span class="payment-label">Date d\'échéance:</span> ';
+                  echo '<span class="payment-value">' . date('d/m/Y', strtotime($dateEcheance)) . '</span>';
                 }
-            }
-          ?>
-          
-          <div class="echeances-section">
-            <div class="echeances-header">
-              <h4><i class="icon-calendar"></i> Échéances de Paiement</h4>
-            </div>
-            
-            <!-- Résumé des échéances -->
-            <div class="echeance-summary">
-              <div class="summary-stat">
-                <strong>Total:</strong> <?php echo $totalEcheances; ?>
-              </div>
-              <div class="summary-stat">
-                <strong>En retard:</strong> <span style="color: #dc3545;"><?php echo $echeancesEnRetard; ?></span>
-              </div>
-              <div class="summary-stat">
-                <strong>En cours:</strong> <span style="color: #17a2b8;"><?php echo $echeancesEnCours; ?></span>
-              </div>
-              <div class="summary-stat">
-                <strong>Réglées:</strong> <span style="color: #28a745;"><?php echo $echeancesReglees; ?></span>
-              </div>
-              <div class="summary-stat">
-                <strong>Montant total:</strong> <?php echo number_format($montantTotal, 0); ?> GNF
-              </div>
-              <?php if ($montantEnRetard > 0) { ?>
-              <div class="summary-stat">
-                <strong>En retard:</strong> <span style="color: #dc3545;"><?php echo number_format($montantEnRetard, 0); ?> GNF</span>
-              </div>
-              <?php } ?>
-            </div>
-            
-            <!-- Liste des échéances -->
-            <?php foreach ($echeancesData as $echeance) { 
-              $montantEcheance = floatval($echeance['Price']) * intval($echeance['ProductQty']);
-              $statut = $echeance['StatutActuel'];
-              $cssClass = 'echeance-' . str_replace('_', '-', $statut);
-            ?>
-            <div class="echeance-item <?php echo $cssClass; ?>">
-              <div class="row-fluid">
-                <div class="span6">
-                  <strong>Produit:</strong> <?php echo $echeance['ProductName'] ? htmlspecialchars($echeance['ProductName']) : 'Produit #' . $echeance['ProductId']; ?><br>
-                  <strong>Quantité:</strong> <?php echo $echeance['ProductQty']; ?> × <?php echo number_format($echeance['Price'], 0); ?> GNF<br>
-                  <strong>Montant:</strong> <span style="font-weight: bold;"><?php echo number_format($montantEcheance, 0); ?> GNF</span>
-                </div>
-                <div class="span6">
-                  <strong>Type:</strong> <?php echo getTypeEcheance($echeance['TypeEcheance']); ?><br>
-                  <strong>Échéance:</strong> 
-                  <?php 
-                  if ($echeance['DateEcheance']) {
-                    echo date('d/m/Y', strtotime($echeance['DateEcheance']));
-                    if ($echeance['JoursRestants'] !== null) {
-                      if ($echeance['JoursRestants'] < 0) {
-                        echo ' <span style="color: #dc3545;">(' . abs($echeance['JoursRestants']) . ' jours de retard)</span>';
-                      } else if ($echeance['JoursRestants'] == 0) {
-                        echo ' <span style="color: #ffc107;">(Aujourd\'hui)</span>';
-                      } else {
-                        echo ' <span style="color: #17a2b8;">(dans ' . $echeance['JoursRestants'] . ' jours)</span>';
-                      }
-                    }
-                  } else {
-                    echo 'Non définie';
-                  }
-                  ?><br>
-                  <strong>Statut:</strong> <?php echo getStatusBadge($statut); ?>
-                </div>
+                ?>
               </div>
             </div>
-            <?php } ?>
           </div>
-          
           <?php } ?>
           
           <div class="widget-box">
