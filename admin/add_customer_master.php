@@ -1,7 +1,5 @@
 <?php 
 session_start();
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 include('includes/dbconnection.php');
 
@@ -13,6 +11,38 @@ if (empty($_SESSION['imsaid'])) {
 
 $success_message = '';
 $error_message = '';
+
+// Check if tblcustomer_master exists, if not create it
+$tableCheck = mysqli_query($con, "SHOW TABLES LIKE 'tblcustomer_master'");
+if (mysqli_num_rows($tableCheck) == 0) {
+    // Create the table
+    $createTable = "
+    CREATE TABLE `tblcustomer_master` (
+      `id` int(11) NOT NULL AUTO_INCREMENT,
+      `CustomerName` varchar(255) NOT NULL,
+      `CustomerContact` varchar(20) NOT NULL COMMENT 'Phone number (Guinean format)',
+      `CustomerEmail` varchar(255) DEFAULT NULL,
+      `CustomerAddress` text DEFAULT NULL,
+      `CustomerRegdate` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+      `Status` enum('active','inactive') DEFAULT 'active',
+      `TotalPurchases` decimal(12,2) DEFAULT 0.00 COMMENT 'Total lifetime purchases',
+      `TotalDues` decimal(12,2) DEFAULT 0.00 COMMENT 'Current outstanding amount',
+      `LastPurchaseDate` timestamp NULL DEFAULT NULL,
+      `Notes` text DEFAULT NULL,
+      PRIMARY KEY (`id`),
+      UNIQUE KEY `unique_contact` (`CustomerContact`),
+      KEY `idx_customer_email` (`CustomerEmail`),
+      KEY `idx_customer_name` (`CustomerName`),
+      KEY `idx_status` (`Status`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci 
+    COMMENT='Master customer table for customer management'";
+    
+    if (mysqli_query($con, $createTable)) {
+        $success_message = 'Table client créée avec succès. ';
+    } else {
+        $error_message = 'Erreur lors de la création de la table: ' . mysqli_error($con);
+    }
+}
 
 // Ajouter un nouveau client
 if (isset($_POST['add_customer'])) {
@@ -40,7 +70,7 @@ if (isset($_POST['add_customer'])) {
                                 VALUES ('$name', '$mobile', '$email', '$address', NOW())";
                 
                 if (mysqli_query($con, $insertQuery)) {
-                    $success_message = 'Client ajouté avec succès dans le répertoire client';
+                    $success_message .= 'Client ajouté avec succès dans le répertoire client';
                     // Réinitialiser les champs après succès
                     $_POST = array();
                 } else {
@@ -51,9 +81,22 @@ if (isset($_POST['add_customer'])) {
     }
 }
 
-// Statistiques pour l'affichage
-$totalCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer"))['count'];
-$todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer WHERE DATE(CustomerRegdate) = CURDATE()"))['count'];
+// Statistiques pour l'affichage - utiliser la table master des clients
+$totalCustomers = 0;
+$todayCustomers = 0;
+$totalBills = 0;
+$totalRevenue = 0;
+
+// Check if table exists before querying
+$tableCheck = mysqli_query($con, "SHOW TABLES LIKE 'tblcustomer_master'");
+if (mysqli_num_rows($tableCheck) > 0) {
+    $totalCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer_master"))['count'];
+    $todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer_master WHERE DATE(CustomerRegdate) = CURDATE()"))['count'];
+}
+
+// Statistiques du système de facturation existant
+$totalBills = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer"))['count'];
+$totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) as total FROM tblcustomer"))['total'];
 ?>
 
 <!DOCTYPE html>
@@ -73,6 +116,12 @@ $todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as coun
         .customer-stats {
             background-color: #e7f3ff;
             border-left: 4px solid #007bff;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .billing-stats {
+            background-color: #f0f8e7;
+            border-left: 4px solid #28a745;
             padding: 15px;
             margin-bottom: 20px;
         }
@@ -133,6 +182,14 @@ $todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as coun
             display: inline-block;
             width: 120px;
         }
+        .setup-info {
+            background-color: #fcf8e3;
+            border: 1px solid #faebcc;
+            color: #8a6d3b;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
@@ -154,13 +211,30 @@ $todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as coun
         </div>
         
         <div class="container-fluid">
-            <!-- Statistiques -->
+            <!-- Info de configuration -->
+            <div class="setup-info">
+                <i class="icon-info-sign"></i>
+                <strong>Configuration automatique:</strong> Cette page configure automatiquement votre système de gestion client. 
+                Le répertoire client sera séparé de votre système de facturation existant.
+            </div>
+
+            <!-- Statistiques Clients -->
             <div class="customer-stats">
                 <i class="icon-user"></i> 
-                <strong>Total des clients :</strong> <?php echo $totalCustomers; ?>
+                <strong>Répertoire Client:</strong> <?php echo $totalCustomers; ?> clients
                 <span style="margin-left: 20px;">
                     <i class="icon-calendar"></i>
-                    <strong>Nouveaux aujourd'hui :</strong> <?php echo $todayCustomers; ?>
+                    <strong>Nouveaux aujourd'hui:</strong> <?php echo $todayCustomers; ?>
+                </span>
+            </div>
+
+            <!-- Statistiques Facturation -->
+            <div class="billing-stats">
+                <i class="icon-file-text"></i> 
+                <strong>Système de Facturation:</strong> <?php echo $totalBills; ?> factures
+                <span style="margin-left: 20px;">
+                    <i class="icon-money"></i>
+                    <strong>Chiffre d'affaires:</strong> <?php echo number_format($totalRevenue ?: 0); ?> GNF
                 </span>
             </div>
 
@@ -281,8 +355,11 @@ $todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as coun
                                 <li>Les numéros doivent commencer par 6</li>
                             </ul>
                             
-                            <h6><i class="icon-envelope"></i> Email (Optionnel)</h6>
-                            <p>Format email valide requis si renseigné</p>
+                            <h6><i class="icon-info-sign"></i> Système</h6>
+                            <p>Cette page gère le <strong>répertoire client</strong> principal. Vos factures existantes restent intactes.</p>
+                            
+                            <h6><i class="icon-link"></i> Intégration</h6>
+                            <p>Les clients créés ici seront automatiquement liés aux futures factures.</p>
                         </div>
                     </div>
 
