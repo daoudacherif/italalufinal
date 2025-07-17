@@ -381,7 +381,7 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
         }
         
         .modern-table .widget-title {
-            background: linear-gradient(135deg, #495057, #6c757d);
+            background: linear-gradient(135deg, #ffffffff, );
             color: white;
             padding: 20px;
             margin: 0;
@@ -649,7 +649,7 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
                     <a href="manage_customers.php" class="btn btn-info">
                         <i class="icon-file-text"></i> Historique Factures
                     </a>
-                    <a href="factures_echeance.php" class="btn btn-warning">
+                    <a href="recouvrement.php" class="btn btn-warning">
                         <i class="icon-time"></i> Gestion Échéances
                     </a>
                 </div>
