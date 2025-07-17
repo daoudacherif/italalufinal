@@ -134,145 +134,453 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
     <?php include_once('includes/cs.php'); ?>
     <?php include_once('includes/responsive.php'); ?>
     <style>
-        .customer-stats {
-            background-color: #e7f3ff;
-            border-left: 4px solid #007bff;
-            padding: 15px;
+        /* Tableau de bord moderne */
+        .stats-dashboard {
+            display: flex;
+            gap: 15px;
             margin-bottom: 20px;
+            flex-wrap: wrap;
         }
-        .credit-stats {
-            background-color: #fff3cd;
-            border-left: 4px solid #ffc107;
-            padding: 15px;
-            margin-bottom: 20px;
+        
+        .stat-card {
+            flex: 1;
+            min-width: 180px;
+            background: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-left: 4px solid;
+            transition: transform 0.2s, box-shadow 0.2s;
         }
-        .stat-box {
-            display: inline-block;
-            margin-right: 30px;
-            text-align: center;
-            min-width: 120px;
+        
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
+        
+        .stat-card.primary {
+            border-left-color: #007bff;
+        }
+        
+        .stat-card.success {
+            border-left-color: #28a745;
+        }
+        
+        .stat-card.warning {
+            border-left-color: #ffc107;
+        }
+        
+        .stat-card.danger {
+            border-left-color: #dc3545;
+        }
+        
+        .stat-card.info {
+            border-left-color: #17a2b8;
+        }
+        
         .stat-value {
-            font-size: 18px;
+            font-size: 28px;
             font-weight: bold;
-            color: #333;
+            margin-bottom: 8px;
+            color: #2c3e50;
         }
+        
         .stat-label {
-            font-size: 11px;
-            color: #666;
+            font-size: 13px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.5px;
         }
-        .customer-actions {
-            white-space: nowrap;
+        
+        .stat-icon {
+            float: right;
+            font-size: 24px;
+            opacity: 0.3;
+            margin-top: -10px;
         }
-        .dues-high {
-            color: #d9534f;
-            font-weight: bold;
+        
+        /* Section de filtres moderne */
+        .filters-section {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         }
-        .dues-zero {
-            color: #5cb85c;
+        
+        .filter-title {
+            color: #495057;
+            font-weight: 600;
+            margin-bottom: 15px;
+            font-size: 16px;
         }
-        .credit-status {
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 11px;
-            font-weight: bold;
+        
+        .filter-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
         }
-        .credit-ok {
-            background-color: #d4edda;
-            color: #155724;
+        
+        .filter-btn {
+            padding: 8px 16px;
+            border: 2px solid #dee2e6;
+            background: white;
+            color: #6c757d;
+            border-radius: 25px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
         }
-        .credit-warning {
-            background-color: #fff3cd;
+        
+        .filter-btn:hover {
+            border-color: #007bff;
+            color: #007bff;
+            text-decoration: none;
+        }
+        
+        .filter-btn.active {
+            background: #007bff;
+            border-color: #007bff;
+            color: white;
+        }
+        
+        .filter-btn.success {
+            border-color: #28a745;
+            color: #28a745;
+        }
+        
+        .filter-btn.success.active {
+            background: #28a745;
+            border-color: #28a745;
+            color: white;
+        }
+        
+        .filter-btn.warning {
+            border-color: #ffc107;
             color: #856404;
         }
-        .credit-danger {
-            background-color: #f8d7da;
-            color: #721c24;
+        
+        .filter-btn.warning.active {
+            background: #ffc107;
+            border-color: #ffc107;
+            color: #212529;
         }
-        .credit-none {
-            background-color: #e2e3e5;
-            color: #6c757d;
+        
+        .filter-btn.danger {
+            border-color: #dc3545;
+            color: #dc3545;
         }
-        .pagination {
-            text-align: center;
-            margin-top: 20px;
-        }
-        .pagination a {
-            display: inline-block;
-            padding: 8px 16px;
-            margin: 0 4px;
-            text-decoration: none;
-            border: 1px solid #ddd;
-            color: #007bff;
-        }
-        .pagination a.active {
-            background-color: #007bff;
+        
+        .filter-btn.danger.active {
+            background: #dc3545;
+            border-color: #dc3545;
             color: white;
-            border: 1px solid #007bff;
         }
-        .pagination a:hover:not(.active) {
-            background-color: #ddd;
-        }
-        .quick-update-form {
+        
+        /* Badges de statut modernes */
+        .credit-status {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
             display: inline-block;
-            margin-left: 5px;
         }
-        .quick-update-form input {
-            width: 80px;
-            font-size: 11px;
-            padding: 2px 5px;
-            margin: 0 2px;
+        
+        .credit-ok {
+            background: linear-gradient(135deg, #d4edda, #c3e6cb);
+            color: #155724;
+            border: 1px solid #c3e6cb;
         }
-        .quick-update-form button {
-            padding: 2px 6px;
-            font-size: 11px;
+        
+        .credit-warning {
+            background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+            color: #856404;
+            border: 1px solid #ffeaa7;
         }
-        .credit-filter-bar {
-            background-color: #f8f9fa;
-            padding: 10px;
-            border-radius: 4px;
-            margin-bottom: 15px;
+        
+        .credit-danger {
+            background: linear-gradient(135deg, #f8d7da, #f5c6cb);
+            color: #721c24;
+            border: 1px solid #f5c6cb;
         }
-        .filter-button {
-            margin-right: 5px;
-            margin-bottom: 5px;
+        
+        .credit-none {
+            background: linear-gradient(135deg, #e2e3e5, #d6d8db);
+            color: #495057;
+            border: 1px solid #d6d8db;
         }
+        
+        /* Barres d'utilisation animées */
+        .usage-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
         .usage-bar {
-            width: 60px;
-            height: 10px;
-            background-color: #e9ecef;
-            border-radius: 5px;
+            width: 80px;
+            height: 12px;
+            background: #e9ecef;
+            border-radius: 6px;
             overflow: hidden;
-            display: inline-block;
-            vertical-align: middle;
+            position: relative;
         }
+        
         .usage-fill {
             height: 100%;
-            transition: width 0.3s;
+            border-radius: 6px;
+            transition: width 0.8s ease-in-out;
+            position: relative;
         }
+        
         .usage-fill.low {
-            background-color: #28a745;
+            background: linear-gradient(90deg, #28a745, #34ce57);
         }
+        
         .usage-fill.medium {
-            background-color: #ffc107;
+            background: linear-gradient(90deg, #ffc107, #ffcd39);
         }
+        
         .usage-fill.high {
-            background-color: #dc3545;
+            background: linear-gradient(90deg, #dc3545, #e55370);
         }
-        .message {
-            padding: 10px;
-            margin-bottom: 15px;
+        
+        .usage-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .usage-percent {
+            font-size: 12px;
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        /* Tableaux modernes */
+        .modern-table {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        
+        .modern-table .widget-title {
+            background: linear-gradient(135deg, #495057, #6c757d);
+            color: white;
+            padding: 20px;
+            margin: 0;
+        }
+        
+        .modern-table .widget-title h5 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .modern-table table {
+            margin: 0;
+        }
+        
+        .modern-table thead th {
+            background: #f8f9fa;
+            color: #495057;
+            font-weight: 600;
+            padding: 15px 12px;
+            border-bottom: 2px solid #dee2e6;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .modern-table tbody tr {
+            transition: background-color 0.2s;
+        }
+        
+        .modern-table tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .modern-table tbody td {
+            padding: 15px 12px;
+            vertical-align: middle;
+            border-bottom: 1px solid #f1f3f4;
+        }
+        
+        /* Boutons d'action modernes */
+        .action-buttons {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        
+        .btn-modern {
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .btn-modern:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .btn-modern.btn-info {
+            background: linear-gradient(135deg, #17a2b8, #20c997);
+            color: white;
+        }
+        
+        .btn-modern.btn-warning {
+            background: linear-gradient(135deg, #ffc107, #fd7e14);
+            color: #212529;
+        }
+        
+        .btn-modern.btn-danger {
+            background: linear-gradient(135deg, #dc3545, #e74c3c);
+            color: white;
+        }
+        
+        .btn-modern.btn-success {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+        }
+        
+        /* Formulaire de mise à jour rapide */
+        .quick-update-form {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 5px;
+        }
+        
+        .quick-update-input {
+            width: 90px;
+            padding: 4px 8px;
+            border: 1px solid #dee2e6;
             border-radius: 4px;
+            font-size: 12px;
         }
-        .message.success {
-            background-color: #d4edda;
-            border-color: #c3e6cb;
+        
+        .quick-update-btn {
+            padding: 4px 8px;
+            background: #17a2b8;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        
+        .quick-update-btn:hover {
+            background: #138496;
+        }
+        
+        /* Messages d'alerte */
+        .alert-modern {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+        }
+        
+        .alert-modern.success {
+            background: linear-gradient(135deg, #d4edda, #c3e6cb);
             color: #155724;
+            border: 1px solid #c3e6cb;
         }
-        .message.error {
-            background-color: #f8d7da;
-            border-color: #f5c6cb;
+        
+        .alert-modern.error {
+            background: linear-gradient(135deg, #f8d7da, #f5c6cb);
             color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        /* Pagination moderne */
+        .modern-pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            margin-top: 30px;
+        }
+        
+        .modern-pagination a {
+            padding: 10px 15px;
+            background: white;
+            color: #6c757d;
+            text-decoration: none;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .modern-pagination a:hover {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+            transform: translateY(-1px);
+        }
+        
+        .modern-pagination a.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .stats-dashboard {
+                flex-direction: column;
+            }
+            
+            .filter-buttons {
+                flex-direction: column;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+            }
+            
+            .usage-container {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+        
+        /* Animations */
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
     </style>
 </head>
@@ -294,49 +602,38 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
         <div class="container-fluid">
             <!-- Messages de confirmation/erreur -->
             <?php if (isset($message)): ?>
-            <div class="message <?php echo $messageType; ?>">
+            <div class="alert-modern <?php echo $messageType; ?> fade-in">
                 <i class="icon-<?php echo $messageType == 'success' ? 'ok' : 'warning-sign'; ?>"></i>
                 <?php echo $message; ?>
             </div>
             <?php endif; ?>
 
-            <!-- Statistiques générales -->
-            <div class="customer-stats">
-                <div class="stat-box">
+            <!-- Tableau de bord des statistiques -->
+            <div class="stats-dashboard fade-in">
+                <div class="stat-card primary">
                     <div class="stat-value"><?php echo number_format($stats['total_customers']); ?></div>
                     <div class="stat-label">Total Clients</div>
+                    <i class="icon-user stat-icon"></i>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-value"><?php echo number_format($stats['total_revenue']); ?></div>
+                <div class="stat-card success">
+                    <div class="stat-value"><?php echo number_format($stats['total_revenue'] / 1000000, 1); ?>M</div>
                     <div class="stat-label">Chiffre d'Affaires (GNF)</div>
+                    <i class="icon-money stat-icon"></i>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-value"><?php echo number_format($stats['total_dues']); ?></div>
+                <div class="stat-card warning">
+                    <div class="stat-value"><?php echo number_format($stats['total_dues'] / 1000000, 1); ?>M</div>
                     <div class="stat-label">Créances Totales (GNF)</div>
+                    <i class="icon-time stat-icon"></i>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-value"><?php echo number_format($stats['customers_with_dues']); ?></div>
-                    <div class="stat-label">Clients avec Créances</div>
-                </div>
-            </div>
-
-            <!-- Statistiques des plafonds -->
-            <div class="credit-stats">
-                <div class="stat-box">
-                    <div class="stat-value"><?php echo number_format($stats['total_credit_limits']); ?></div>
+                <div class="stat-card info">
+                    <div class="stat-value"><?php echo number_format($stats['total_credit_limits'] / 1000000, 1); ?>M</div>
                     <div class="stat-label">Plafonds Totaux (GNF)</div>
+                    <i class="icon-credit-card stat-icon"></i>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-value"><?php echo number_format($stats['customers_with_limits']); ?></div>
-                    <div class="stat-label">Clients avec Plafonds</div>
-                </div>
-                <div class="stat-box">
+                <div class="stat-card danger">
                     <div class="stat-value"><?php echo number_format($stats['customers_over_limit']); ?></div>
                     <div class="stat-label">⚠️ Plafonds Dépassés</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-value"><?php echo number_format($stats['customers_near_limit']); ?></div>
-                    <div class="stat-label">⚡ Près du Plafond</div>
+                    <i class="icon-warning-sign stat-icon"></i>
                 </div>
             </div>
 
@@ -352,80 +649,85 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
                     <a href="manage_customers.php" class="btn btn-info">
                         <i class="icon-file-text"></i> Historique Factures
                     </a>
+                    <a href="factures_echeance.php" class="btn btn-warning">
+                        <i class="icon-time"></i> Gestion Échéances
+                    </a>
                 </div>
             </div>
             <hr>
 
-            <!-- Filtres par statut de crédit -->
-            <div class="credit-filter-bar">
-                <strong><i class="icon-filter"></i> Filtrer par statut de crédit :</strong>
-                <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => ''])); ?>" 
-                   class="btn btn-small filter-button <?php echo empty($creditFilter) ? 'btn-primary' : ''; ?>">
-                    Tous
-                </a>
-                <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => 'no_limit'])); ?>" 
-                   class="btn btn-small filter-button <?php echo $creditFilter == 'no_limit' ? 'btn-primary' : ''; ?>">
-                    Sans Limite (<?php echo number_format($stats['total_customers'] - $stats['customers_with_limits']); ?>)
-                </a>
-                <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => 'within_limit'])); ?>" 
-                   class="btn btn-small btn-success filter-button <?php echo $creditFilter == 'within_limit' ? 'btn-primary' : ''; ?>">
-                    Dans les Limites
-                </a>
-                <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => 'near_limit'])); ?>" 
-                   class="btn btn-small btn-warning filter-button <?php echo $creditFilter == 'near_limit' ? 'btn-primary' : ''; ?>">
-                    Près du Plafond (<?php echo $stats['customers_near_limit']; ?>)
-                </a>
-                <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => 'over_limit'])); ?>" 
-                   class="btn btn-small btn-danger filter-button <?php echo $creditFilter == 'over_limit' ? 'btn-primary' : ''; ?>">
-                    Plafond Dépassé (<?php echo $stats['customers_over_limit']; ?>)
-                </a>
-            </div>
+            <!-- Section de filtres moderne -->
+            <div class="filters-section fade-in">
+                <div class="filter-title">
+                    <i class="icon-filter"></i> Filtrer par statut de crédit
+                </div>
+                
+                <div class="filter-buttons">
+                    <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => ''])); ?>" 
+                       class="filter-btn <?php echo empty($creditFilter) ? 'active' : ''; ?>">
+                        <i class="icon-th-list"></i> Tous (<?php echo number_format($stats['total_customers']); ?>)
+                    </a>
+                    <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => 'no_limit'])); ?>" 
+                       class="filter-btn <?php echo $creditFilter == 'no_limit' ? 'active' : ''; ?>">
+                        <i class="icon-unlock"></i> Sans Limite (<?php echo number_format($stats['total_customers'] - $stats['customers_with_limits']); ?>)
+                    </a>
+                    <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => 'within_limit'])); ?>" 
+                       class="filter-btn success <?php echo $creditFilter == 'within_limit' ? 'active' : ''; ?>">
+                        <i class="icon-ok"></i> Dans les Limites
+                    </a>
+                    <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => 'near_limit'])); ?>" 
+                       class="filter-btn warning <?php echo $creditFilter == 'near_limit' ? 'active' : ''; ?>">
+                        <i class="icon-warning-sign"></i> Près du Plafond (<?php echo $stats['customers_near_limit']; ?>)
+                    </a>
+                    <a href="?<?php echo http_build_query(array_merge($_GET, ['credit_filter' => 'over_limit'])); ?>" 
+                       class="filter-btn danger <?php echo $creditFilter == 'over_limit' ? 'active' : ''; ?>">
+                        <i class="icon-remove"></i> Plafond Dépassé (<?php echo $stats['customers_over_limit']; ?>)
+                    </a>
+                </div>
 
-            <!-- Barre de recherche -->
-            <div class="row-fluid">
-                <div class="span12">
-                    <form method="get" class="form-inline">
-                        <div class="input-append">
-                            <input type="text" name="search" value="<?php echo htmlspecialchars($searchTerm); ?>" 
-                                   placeholder="Rechercher par nom, téléphone ou email..." class="span4">
-                            <button type="submit" class="btn btn-primary">
-                                <i class="icon-search"></i> Rechercher
-                            </button>
+                <!-- Barre de recherche -->
+                <form method="get" class="form-inline">
+                    <div class="row-fluid">
+                        <div class="span8">
+                            <div class="input-append">
+                                <input type="text" name="search" value="<?php echo htmlspecialchars($searchTerm); ?>" 
+                                       placeholder="🔍 Rechercher par nom, téléphone ou email..." class="span11">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="icon-search"></i>
+                                </button>
+                            </div>
                         </div>
-                        <?php if (!empty($creditFilter)): ?>
-                            <input type="hidden" name="credit_filter" value="<?php echo htmlspecialchars($creditFilter); ?>">
-                        <?php endif; ?>
-                        <?php if (!empty($searchTerm) || !empty($creditFilter)): ?>
-                        <a href="manage_customer_master.php" class="btn">
-                            <i class="icon-remove"></i> Effacer Filtres
-                        </a>
-                        <?php endif; ?>
-                    </form>
-                </div>
+                        <div class="span4">
+                            <?php if (!empty($creditFilter)): ?>
+                                <input type="hidden" name="credit_filter" value="<?php echo htmlspecialchars($creditFilter); ?>">
+                            <?php endif; ?>
+                            <?php if (!empty($searchTerm) || !empty($creditFilter)): ?>
+                            <a href="manage_customer_master.php" class="btn btn-warning">
+                                <i class="icon-remove"></i> Effacer Filtres
+                            </a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </form>
             </div>
-            <hr>
 
-            <!-- Liste des clients -->
-            <div class="widget-box">
+            <!-- Liste des clients moderne -->
+            <div class="modern-table fade-in">
                 <div class="widget-title">
-                    <span class="icon"><i class="icon-th"></i></span>
-                    <h5>💳 Clients avec Plafonds de Crédit (<?php echo $totalRecords; ?>)</h5>
+                    <h5><i class="icon-credit-card"></i> Clients avec Plafonds de Crédit (<?php echo $totalRecords; ?>)</h5>
                 </div>
                 <div class="widget-content nopadding">
-                    <table class="table table-bordered table-striped" style="font-size: 13px;">
+                    <table class="table table-striped">
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Nom</th>
-                                <th>Téléphone</th>
-                                <th>Email</th>
-                                <th>Plafond Crédit</th>
-                                <th>Créances</th>
-                                <th>Utilisation</th>
+                                <th>Client</th>
+                                <th>Contact</th>
+                                <th>Plafond & Modification</th>
+                                <th>Créances Actuelles</th>
+                                <th>Utilisation du Crédit</th>
                                 <th>Statut</th>
-                                <th>Factures</th>
-                                <th>Achats Totaux</th>
-                                <th>Dernier Achat</th>
+                                <th>Activité</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -434,7 +736,7 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
                             if (mysqli_num_rows($customersResult) > 0) {
                                 $i = $offset + 1;
                                 while ($customer = mysqli_fetch_assoc($customersResult)) {
-                                    $duesClass = $customer['TotalDues'] > 0 ? 'dues-high' : 'dues-zero';
+                                    $duesClass = $customer['TotalDues'] > 0 ? 'montant-echu' : 'montant-normal';
                                     $lastPurchase = $customer['LastPurchaseDate'] ? 
                                         date('d/m/Y', strtotime($customer['LastPurchaseDate'])) : 
                                         'Jamais';
@@ -469,58 +771,81 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
                                     $usageClass = $usagePercent < 50 ? 'low' : ($usagePercent < 80 ? 'medium' : 'high');
                                     ?>
                                     <tr>
-                                        <td><?php echo $i++; ?></td>
-                                        <td><strong><?php echo htmlspecialchars($customer['CustomerName']); ?></strong></td>
-                                        <td><?php echo htmlspecialchars($customer['CustomerContact']); ?></td>
-                                        <td><?php echo htmlspecialchars($customer['CustomerEmail'] ?: '-'); ?></td>
+                                        <td><strong><?php echo $i++; ?></strong></td>
                                         <td>
-                                            <?php echo number_format($creditLimit, 0, ',', ' '); ?> GNF
+                                            <div>
+                                                <strong><?php echo htmlspecialchars($customer['CustomerName']); ?></strong>
+                                                <br>
+                                                <small class="text-muted">
+                                                    <?php echo htmlspecialchars($customer['CustomerEmail'] ?: 'Email non renseigné'); ?>
+                                                </small>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <a href="tel:<?php echo $customer['CustomerContact']; ?>" style="text-decoration: none;">
+                                                <i class="icon-phone"></i> <?php echo htmlspecialchars($customer['CustomerContact']); ?>
+                                            </a>
+                                        </td>
+                                        <td>
+                                            <div style="color: #495057; font-weight: 600;">
+                                                <?php echo number_format($creditLimit, 0, ',', ' '); ?> GNF
+                                            </div>
                                             <form method="post" class="quick-update-form">
                                                 <input type="hidden" name="customer_id" value="<?php echo $customer['id']; ?>">
-                                                <input type="number" name="new_credit_limit" value="<?php echo $creditLimit; ?>" min="0" step="1000">
-                                                <button type="submit" name="quick_update_credit" class="btn btn-mini btn-info" title="Mettre à jour">
+                                                <input type="number" name="new_credit_limit" value="<?php echo $creditLimit; ?>" 
+                                                       min="0" step="1000" class="quick-update-input">
+                                                <button type="submit" name="quick_update_credit" class="quick-update-btn" title="Mettre à jour">
                                                     <i class="icon-refresh"></i>
                                                 </button>
                                             </form>
                                         </td>
-                                        <td class="<?php echo $duesClass; ?>">
-                                            <?php echo number_format($totalDues, 0, ',', ' '); ?> GNF
+                                        <td>
+                                            <span style="color: <?php echo $totalDues > 0 ? '#dc3545' : '#28a745'; ?>; font-weight: 600;">
+                                                <?php echo number_format($totalDues, 0, ',', ' '); ?> GNF
+                                            </span>
                                         </td>
                                         <td>
                                             <?php if ($creditLimit > 0): ?>
-                                                <div class="usage-bar">
-                                                    <div class="usage-fill <?php echo $usageClass; ?>" 
-                                                         style="width: <?php echo min(100, $usagePercent); ?>%"></div>
+                                                <div class="usage-container">
+                                                    <div class="usage-bar">
+                                                        <div class="usage-fill <?php echo $usageClass; ?>" 
+                                                             style="width: <?php echo min(100, $usagePercent); ?>%" 
+                                                             data-percent="<?php echo $usagePercent; ?>"></div>
+                                                    </div>
+                                                    <span class="usage-percent"><?php echo $usagePercent; ?>%</span>
                                                 </div>
-                                                <small><?php echo $usagePercent; ?>%</small>
                                             <?php else: ?>
-                                                -
+                                                <span class="text-muted">-</span>
                                             <?php endif; ?>
                                         </td>
                                         <td>
                                             <span class="credit-status <?php echo $creditClass; ?>"><?php echo $creditStatus; ?></span>
                                         </td>
                                         <td>
-                                            <span class="badge badge-info"><?php echo $customer['TotalInvoices']; ?></span>
+                                            <div style="font-size: 12px;">
+                                                <strong><?php echo $customer['TotalInvoices']; ?></strong> facture(s)
+                                                <br>
+                                                <span class="text-muted"><?php echo $lastPurchase; ?></span>
+                                            </div>
                                         </td>
-                                        <td><?php echo number_format($customer['TotalPurchases'], 0, ',', ' '); ?> GNF</td>
-                                        <td><?php echo $lastPurchase; ?></td>
-                                        <td class="customer-actions">
-                                            <a href="customer_details.php?id=<?php echo $customer['id']; ?>" 
-                                               class="btn btn-info btn-mini" title="Voir détails">
-                                                <i class="icon-eye-open"></i>
-                                            </a>
-                                            <a href="edit_customer_master.php?id=<?php echo $customer['id']; ?>" 
-                                               class="btn btn-warning btn-mini" title="Modifier">
-                                                <i class="icon-edit"></i>
-                                            </a>
-                                            <?php if ($customer['TotalInvoices'] == 0): ?>
-                                            <a href="manage_customer_master.php?delete_id=<?php echo $customer['id']; ?>" 
-                                               onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce client ?')" 
-                                               class="btn btn-danger btn-mini" title="Supprimer">
-                                                <i class="icon-trash"></i>
-                                            </a>
-                                            <?php endif; ?>
+                                        <td>
+                                            <div class="action-buttons">
+                                                <a href="customer_details.php?id=<?php echo $customer['id']; ?>" 
+                                                   class="btn-modern btn-info" title="Voir détails">
+                                                    <i class="icon-eye-open"></i>
+                                                </a>
+                                                <a href="edit_customer_master.php?id=<?php echo $customer['id']; ?>" 
+                                                   class="btn-modern btn-warning" title="Modifier">
+                                                    <i class="icon-edit"></i>
+                                                </a>
+                                                <?php if ($customer['TotalInvoices'] == 0): ?>
+                                                <a href="manage_customer_master.php?delete_id=<?php echo $customer['id']; ?>" 
+                                                   onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce client ?')" 
+                                                   class="btn-modern btn-danger" title="Supprimer">
+                                                    <i class="icon-trash"></i>
+                                                </a>
+                                                <?php endif; ?>
+                                            </div>
                                         </td>
                                     </tr>
                                     <?php
@@ -528,7 +853,9 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
                             } else {
                                 ?>
                                 <tr>
-                                    <td colspan="12" class="text-center" style="color: red;">
+                                    <td colspan="9" class="text-center" style="color: #6c757d; padding: 40px;">
+                                        <i class="icon-info-sign" style="font-size: 24px; margin-bottom: 10px;"></i>
+                                        <br>
                                         <?php echo !empty($searchTerm) ? 'Aucun client trouvé pour cette recherche' : 'Aucun client enregistré'; ?>
                                     </td>
                                 </tr>
@@ -540,11 +867,13 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
                 </div>
             </div>
 
-            <!-- Pagination -->
+            <!-- Pagination moderne -->
             <?php if ($totalPages > 1): ?>
-            <div class="pagination">
+            <div class="modern-pagination fade-in">
                 <?php if ($page > 1): ?>
-                    <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page-1])); ?>">&laquo; Précédent</a>
+                    <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page-1])); ?>">
+                        <i class="icon-chevron-left"></i> Précédent
+                    </a>
                 <?php endif; ?>
                 
                 <?php
@@ -559,23 +888,36 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
                 <?php endfor; ?>
                 
                 <?php if ($page < $totalPages): ?>
-                    <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page+1])); ?>">Suivant &raquo;</a>
+                    <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page+1])); ?>">
+                        Suivant <i class="icon-chevron-right"></i>
+                    </a>
                 <?php endif; ?>
             </div>
             <?php endif; ?>
 
-            <!-- Légende -->
-            <div style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 4px;">
-                <h6><i class="icon-info-sign"></i> Légende des Statuts de Crédit :</h6>
-                <div style="margin-top: 10px;">
-                    <span class="credit-status credit-none">Aucune limite</span> - Client sans plafond de crédit défini<br>
-                    <span class="credit-status credit-ok">OK</span> - Crédit dans les limites autorisées<br>
-                    <span class="credit-status credit-warning">Près limite</span> - Utilisation >80% du plafond<br>
-                    <span class="credit-status credit-danger">DÉPASSÉ</span> - Plafond de crédit dépassé ⚠️
+            <!-- Légende moderne -->
+            <div style="margin-top: 30px; padding: 20px; background: linear-gradient(135deg, #f8f9fa, #e9ecef); border-radius: 10px;">
+                <h6 style="color: #495057; font-weight: 600; margin-bottom: 15px;">
+                    <i class="icon-info-sign"></i> Guide des Statuts de Crédit
+                </h6>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="credit-status credit-none">Aucune limite</span>
+                        <span style="font-size: 12px; color: #6c757d;">Client sans plafond défini</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="credit-status credit-ok">OK</span>
+                        <span style="font-size: 12px; color: #6c757d;">Crédit dans les limites</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="credit-status credit-warning">Près limite</span>
+                        <span style="font-size: 12px; color: #6c757d;">Utilisation >80% du plafond</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="credit-status credit-danger">DÉPASSÉ</span>
+                        <span style="font-size: 12px; color: #6c757d;">Plafond de crédit dépassé ⚠️</span>
+                    </div>
                 </div>
-                <p style="margin-top: 10px; font-size: 12px; color: #666;">
-                    <strong>Modification rapide :</strong> Utilisez les champs de saisie à côté des plafonds pour modifier rapidement les limites de crédit.
-                </p>
             </div>
         </div>
     </div>
@@ -588,15 +930,25 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
     
     <script>
     $(document).ready(function() {
+        // Animation des barres d'utilisation au chargement
+        setTimeout(function() {
+            $('.usage-fill').each(function() {
+                const targetWidth = $(this).data('percent') + '%';
+                $(this).css('width', '0%').animate({
+                    width: targetWidth
+                }, 1000, 'easeOutCubic');
+            });
+        }, 500);
+        
         // Confirmation pour la mise à jour rapide des plafonds
         $('form.quick-update-form').on('submit', function(e) {
             const newLimit = $(this).find('input[name="new_credit_limit"]').val();
-            const customerName = $(this).closest('tr').find('td:nth-child(2)').text().trim();
+            const customerName = $(this).closest('tr').find('td:nth-child(2) strong').text().trim();
             
             const confirmed = confirm(
-                'Confirmer la modification du plafond de crédit ?\n\n' +
-                'Client: ' + customerName + '\n' +
-                'Nouveau plafond: ' + formatNumber(newLimit) + ' GNF'
+                '💳 Confirmer la modification du plafond de crédit ?\n\n' +
+                '👤 Client: ' + customerName + '\n' +
+                '💰 Nouveau plafond: ' + formatNumber(newLimit) + ' GNF'
             );
             
             if (!confirmed) {
@@ -605,15 +957,35 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
             }
         });
         
-        // Animation des barres d'utilisation
-        $('.usage-fill').each(function() {
-            const width = $(this).css('width');
-            $(this).css('width', '0').animate({width: width}, 1000);
-        });
+        // Effet hover sur les cartes statistiques
+        $('.stat-card').hover(
+            function() {
+                $(this).css('transform', 'translateY(-5px) scale(1.02)');
+            },
+            function() {
+                $(this).css('transform', 'translateY(0) scale(1)');
+            }
+        );
         
+        // Fonction de formatage des nombres
         function formatNumber(num) {
-            return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+            return parseInt(num).toLocaleString('fr-FR');
         }
+        
+        // Auto-refresh des données toutes les 5 minutes
+        setInterval(function() {
+            if (!document.hidden) {
+                // Refresh silencieux des statistiques via AJAX
+                location.reload();
+            }
+        }, 300000); // 5 minutes
+        
+        // Effet de pulse sur les éléments dangereux
+        $('.credit-danger').each(function() {
+            setInterval(() => {
+                $(this).animate({opacity: 0.7}, 500).animate({opacity: 1}, 500);
+            }, 3000);
+        });
     });
     </script>
 </body>
