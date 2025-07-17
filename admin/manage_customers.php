@@ -616,17 +616,17 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
                     <i class="icon-user stat-icon"></i>
                 </div>
                 <div class="stat-card success">
-                    <div class="stat-value"><?php echo number_format($stats['total_revenue'] / 1000000, 1); ?>M</div>
+                    <div class="stat-value"><?php echo number_format($stats['total_revenue'] / 1000000, 1); ?></div>
                     <div class="stat-label">Chiffre d'Affaires (GNF)</div>
                     <i class="icon-money stat-icon"></i>
                 </div>
                 <div class="stat-card warning">
-                    <div class="stat-value"><?php echo number_format($stats['total_dues'] / 1000000, 1); ?>M</div>
+                    <div class="stat-value"><?php echo number_format($stats['total_dues'] / 1000000, 1); ?></div>
                     <div class="stat-label">Créances Totales (GNF)</div>
                     <i class="icon-time stat-icon"></i>
                 </div>
                 <div class="stat-card info">
-                    <div class="stat-value"><?php echo number_format($stats['total_credit_limits'] / 1000000, 1); ?>M</div>
+                    <div class="stat-value"><?php echo number_format($stats['total_credit_limits'] / 1000000, 1); ?></div>
                     <div class="stat-label">Plafonds Totaux (GNF)</div>
                     <i class="icon-credit-card stat-icon"></i>
                 </div>
@@ -895,32 +895,7 @@ $stats = mysqli_fetch_assoc(mysqli_query($con, "
             </div>
             <?php endif; ?>
 
-            <!-- Légende moderne -->
-            <div style="margin-top: 30px; padding: 20px; background: linear-gradient(135deg, #f8f9fa, #e9ecef); border-radius: 10px;">
-                <h6 style="color: #495057; font-weight: 600; margin-bottom: 15px;">
-                    <i class="icon-info-sign"></i> Guide des Statuts de Crédit
-                </h6>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="credit-status credit-none">Aucune limite</span>
-                        <span style="font-size: 12px; color: #6c757d;">Client sans plafond défini</span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="credit-status credit-ok">OK</span>
-                        <span style="font-size: 12px; color: #6c757d;">Crédit dans les limites</span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="credit-status credit-warning">Près limite</span>
-                        <span style="font-size: 12px; color: #6c757d;">Utilisation >80% du plafond</span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="credit-status credit-danger">DÉPASSÉ</span>
-                        <span style="font-size: 12px; color: #6c757d;">Plafond de crédit dépassé ⚠️</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+           
 
     <?php include_once('includes/footer.php'); ?>
     
