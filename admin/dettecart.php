@@ -17,6 +17,140 @@ $adminQuery = mysqli_query($con, "SELECT AdminName FROM tbladmin WHERE ID = '$cu
 $adminData = mysqli_fetch_assoc($adminQuery);
 $currentAdminName = $adminData['AdminName'];
 
+// ==========================================================================
+// FONCTIONS UTILITAIRES POUR LA GESTION DU PLAFOND DE CRÉDIT
+// ==========================================================================
+
+/**
+ * Vérifier si un client peut effectuer un achat sans dépasser son plafond
+ */
+function checkCreditLimit($con, $customerContact, $newAmount) {
+    $result = [
+        'allowed' => false,
+        'message' => '',
+        'current_dues' => 0,
+        'credit_limit' => 0,
+        'remaining_credit' => 0,
+        'customer_name' => ''
+    ];
+    
+    // Récupérer les informations du client
+    $query = "SELECT CustomerName, TotalDues, CreditLimit 
+              FROM tblcustomer_master 
+              WHERE CustomerContact = '" . mysqli_real_escape_string($con, $customerContact) . "' 
+              AND Status = 'active' 
+              LIMIT 1";
+    
+    $customerResult = mysqli_query($con, $query);
+    
+    if (!$customerResult || mysqli_num_rows($customerResult) == 0) {
+        $result['message'] = 'Client introuvable ou inactif';
+        return $result;
+    }
+    
+    $customer = mysqli_fetch_assoc($customerResult);
+    $result['customer_name'] = $customer['CustomerName'];
+    $result['current_dues'] = floatval($customer['TotalDues']);
+    $result['credit_limit'] = floatval($customer['CreditLimit']);
+    
+    // Si pas de limite de crédit (0), autoriser
+    if ($result['credit_limit'] == 0) {
+        $result['allowed'] = true;
+        $result['message'] = 'Aucune limite de crédit - Achat autorisé';
+        $result['remaining_credit'] = -1; // Illimité
+        return $result;
+    }
+    
+    // Calculer le crédit restant
+    $result['remaining_credit'] = $result['credit_limit'] - $result['current_dues'];
+    
+    // Vérifier si le nouvel achat peut être effectué
+    if (($result['current_dues'] + $newAmount) <= $result['credit_limit']) {
+        $result['allowed'] = true;
+        $result['message'] = 'Achat autorisé - Crédit suffisant';
+    } else {
+        $result['allowed'] = false;
+        $exceeded = ($result['current_dues'] + $newAmount) - $result['credit_limit'];
+        $result['message'] = "Plafond dépassé de " . number_format($exceeded, 0, ',', ' ') . " GNF";
+    }
+    
+    return $result;
+}
+
+/**
+ * Obtenir un résumé du crédit d'un client
+ */
+function getCustomerCreditSummary($con, $customerContact) {
+    $query = "SELECT CustomerName, TotalDues, CreditLimit, TotalPurchases, LastPurchaseDate
+              FROM tblcustomer_master 
+              WHERE CustomerContact = '" . mysqli_real_escape_string($con, $customerContact) . "' 
+              LIMIT 1";
+    
+    $result = mysqli_query($con, $query);
+    
+    if (!$result || mysqli_num_rows($result) == 0) {
+        return null;
+    }
+    
+    $customer = mysqli_fetch_assoc($result);
+    $creditLimit = floatval($customer['CreditLimit']);
+    $totalDues = floatval($customer['TotalDues']);
+    
+    return [
+        'name' => $customer['CustomerName'],
+        'total_dues' => $totalDues,
+        'credit_limit' => $creditLimit,
+        'remaining_credit' => $creditLimit > 0 ? ($creditLimit - $totalDues) : -1,
+        'total_purchases' => floatval($customer['TotalPurchases']),
+        'last_purchase' => $customer['LastPurchaseDate'],
+        'credit_usage_percent' => $creditLimit > 0 ? round(($totalDues / $creditLimit) * 100, 2) : 0
+    ];
+}
+
+/**
+ * Générer un widget d'information crédit pour l'interface
+ */
+function generateCreditWidget($con, $customerContact) {
+    $summary = getCustomerCreditSummary($con, $customerContact);
+    
+    if (!$summary) {
+        return "<div class='alert alert-warning'>Client introuvable</div>";
+    }
+    
+    $html = "<div class='credit-info-widget'>";
+    $html .= "<h6><i class='icon-credit-card'></i> Informations Crédit - " . htmlspecialchars($summary['name']) . "</h6>";
+    
+    if ($summary['credit_limit'] > 0) {
+        $statusClass = $summary['credit_usage_percent'] > 80 ? 'danger' : ($summary['credit_usage_percent'] > 60 ? 'warning' : 'success');
+        
+        $html .= "<div class='credit-bar alert alert-$statusClass'>";
+        $html .= "<strong>Plafond :</strong> " . number_format($summary['credit_limit'], 0, ',', ' ') . " GNF<br>";
+        $html .= "<strong>Dette actuelle :</strong> " . number_format($summary['total_dues'], 0, ',', ' ') . " GNF<br>";
+        $html .= "<strong>Crédit disponible :</strong> " . number_format($summary['remaining_credit'], 0, ',', ' ') . " GNF<br>";
+        $html .= "<strong>Utilisation :</strong> " . $summary['credit_usage_percent'] . "%";
+        $html .= "</div>";
+    } else {
+        $html .= "<div class='alert alert-info'>";
+        $html .= "<strong>Aucune limite de crédit</strong><br>";
+        $html .= "<strong>Dette actuelle :</strong> " . number_format($summary['total_dues'], 0, ',', ' ') . " GNF";
+        $html .= "</div>";
+    }
+    
+    $html .= "<small class='muted'>";
+    $html .= "Total achats : " . number_format($summary['total_purchases'], 0, ',', ' ') . " GNF";
+    if ($summary['last_purchase']) {
+        $html .= " | Dernier achat : " . date('d/m/Y', strtotime($summary['last_purchase']));
+    }
+    $html .= "</small>";
+    $html .= "</div>";
+    
+    return $html;
+}
+
+// ==========================================================================
+// SUITE DU CODE EXISTANT
+// ==========================================================================
+
 // Configuration des échéances - Traitement
 if (isset($_POST['save_config'])) {
     $defaultDays = intval($_POST['default_days']);
@@ -187,6 +321,10 @@ function updateCustomerMasterStats($con, $customerMasterId) {
     mysqli_query($con, $updateQuery);
 }
 
+// Variables pour le statut du crédit
+$creditStatus = null;
+$creditLimitError = false;
+
 // ----------- Gestion Panier -----------
 
 // Ajout au panier AVEC échéances
@@ -291,14 +429,26 @@ while ($row = mysqli_fetch_assoc($productQuery)) {
     $productNames[] = $row['ProductName'];
 }
 
-// Récupérer la liste des clients existants
+// Récupérer la liste des clients existants avec informations de crédit
 $existingCustomers = [];
-$customerQuery = mysqli_query($con, "SELECT id, CustomerName, CustomerContact, CustomerEmail FROM tblcustomer_master WHERE Status = 'active' ORDER BY CustomerName");
+$customerQuery = mysqli_query($con, "SELECT id, CustomerName, CustomerContact, CustomerEmail, TotalDues, CreditLimit FROM tblcustomer_master WHERE Status = 'active' ORDER BY CustomerName");
 while ($row = mysqli_fetch_assoc($customerQuery)) {
     $existingCustomers[] = $row;
 }
 
-// Checkout + Facturation avec échéances
+// Vérification du crédit via AJAX
+if (isset($_POST['check_credit']) && isset($_POST['customer_contact'])) {
+    $customerContact = preg_replace('/[^0-9+]/', '', $_POST['customer_contact']);
+    $orderAmount = floatval($_POST['order_amount']);
+    
+    $creditCheck = checkCreditLimit($con, $customerContact, $orderAmount);
+    
+    header('Content-Type: application/json');
+    echo json_encode($creditCheck);
+    exit;
+}
+
+// Checkout + Facturation avec échéances ET VÉRIFICATION CRÉDIT
 if (isset($_POST['submit'])) {
     $customerType = $_POST['customer_type'];
     $custname = '';
@@ -357,6 +507,27 @@ if (isset($_POST['submit'])) {
 
     $netTotal = max(0, $grandTotal - $discount);
     $dues = max(0, $netTotal - $paidNow);
+
+    // *** VÉRIFICATION DU PLAFOND DE CRÉDIT ***
+    if ($dues > 0) {
+        $creditCheck = checkCreditLimit($con, $custmobile, $dues);
+        
+        if (!$creditCheck['allowed']) {
+            $errorMsg = "❌ COMMANDE REFUSÉE - PLAFOND DE CRÉDIT DÉPASSÉ\\n\\n";
+            $errorMsg .= "Client: {$creditCheck['customer_name']}\\n";
+            $errorMsg .= "Dette actuelle: " . number_format($creditCheck['current_dues'], 0, ',', ' ') . " GNF\\n";
+            $errorMsg .= "Nouvelle dette: " . number_format($dues, 0, ',', ' ') . " GNF\\n";
+            $errorMsg .= "Plafond autorisé: " . number_format($creditCheck['credit_limit'], 0, ',', ' ') . " GNF\\n\\n";
+            $errorMsg .= "Motif: {$creditCheck['message']}\\n\\n";
+            $errorMsg .= "Solutions:\\n";
+            $errorMsg .= "1. Augmenter le paiement initial\\n";
+            $errorMsg .= "2. Modifier le plafond client\\n";
+            $errorMsg .= "3. Réduire la commande";
+            
+            echo "<script>alert(" . json_encode($errorMsg) . "); window.location='dettecart.php';</script>";
+            exit;
+        }
+    }
 
     // Vérification finale du stock
     $stockCheck = mysqli_query($con, "SELECT p.ProductName, p.Stock, c.ProductQty FROM tblcreditcart c JOIN tblproducts p ON p.ID = c.ProductId WHERE c.IsCheckOut=0");
@@ -455,7 +626,7 @@ if (isset($_POST['submit'])) {
             $paymentInfo = " - Paiement: " . number_format($paidNow, 0, ',', ' ') . " GNF";
         }
 
-        echo "<script>alert(" . json_encode("Facture créée: $billingnum - Échéances configurées$paymentInfo$smsStatusMessage") . "); window.location='invoice_dettecard.php?print=auto';</script>";
+        echo "<script>alert(" . json_encode("✅ Facture créée: $billingnum - Plafond vérifié ✅$paymentInfo$smsStatusMessage") . "); window.location='invoice_dettecard.php?print=auto';</script>";
         exit;
         
     } catch (Exception $e) {
@@ -479,7 +650,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <title>Système de Gestion d'Inventaire | Panier à Terme avec Échéances</title>
+    <title>Système de Gestion d'Inventaire | Panier à Terme avec Échéances + Plafonds</title>
     <?php include_once('includes/cs.php'); ?>
     <?php include_once('includes/responsive.php'); ?>
     
@@ -709,6 +880,78 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             font-weight: bold;
             color: #28a745;
         }
+        
+        /* Styles pour le crédit */
+        .credit-info-widget {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        
+        .credit-info-widget h6 {
+            color: #333;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        
+        .credit-bar {
+            margin-bottom: 10px;
+        }
+        
+        .credit-status-good {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+        
+        .credit-status-warning {
+            background-color: #fff3cd;
+            border-color: #ffeaa7;
+            color: #856404;
+        }
+        
+        .credit-status-danger {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+        
+        .credit-check-button {
+            background-color: #17a2b8;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 12px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        
+        .credit-check-button:hover {
+            background-color: #138496;
+        }
+        
+        .credit-alert {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            display: none;
+        }
+        
+        .credit-ok {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -721,9 +964,9 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                 <a href="dashboard.php" class="tip-bottom">
                     <i class="icon-home"></i> Accueil
                 </a>
-                <a href="dettecart.php" class="current">Panier à Terme avec Échéances</a>
+                <a href="dettecart.php" class="current">Panier à Terme avec Plafonds de Crédit</a>
             </div>
-            <h1>Panier à Terme avec Système d'Échéances</h1>
+            <h1>🛒 Panier à Terme avec Système d'Échéances + 💳 Plafonds de Crédit</h1>
         </div>
   
         <div class="container-fluid">
@@ -790,7 +1033,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             <div class="manage-customers-link">
                 <i class="icon-user"></i>
                 <a href="add_customer_master.php" target="_blank">
-                    Gérer le Répertoire Client (Ajouter, Modifier, Supprimer)
+                    💳 Gérer le Répertoire Client & Plafonds de Crédit (Ajouter, Modifier, Supprimer)
                 </a>
                 - Ouvrir dans un nouvel onglet
             </div>
@@ -798,7 +1041,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             <!-- Indicateur de panier utilisateur -->
             <div class="user-cart-indicator">
                 <i class="icon-user"></i> <strong>Panier géré par: <?php echo htmlspecialchars($currentAdminName); ?></strong>
-                <p class="text-muted small">Système d'échéances intégré pour la gestion des créances</p>
+                <p class="text-muted small">💳 Système d'échéances + plafonds de crédit intégré pour la gestion des créances</p>
             </div>
             
             <?php if ($hasStockIssue): ?>
@@ -949,7 +1192,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                         
                         <!-- Sélection du client -->
                         <div class="customer-selection">
-                            <h4><i class="icon-user"></i> Informations Client</h4>
+                            <h4><i class="icon-user"></i> 💳 Informations Client & Vérification Crédit</h4>
                             
                             <div class="customer-type-radio">
                                 <label><input type="radio" name="customer_type" value="existing" id="existing_customer_radio"> Client Existant</label>
@@ -967,12 +1210,20 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                                 <option value="<?php echo $customer['id']; ?>" 
                                                         data-name="<?php echo htmlspecialchars($customer['CustomerName']); ?>"
                                                         data-contact="<?php echo htmlspecialchars($customer['CustomerContact']); ?>"
-                                                        data-email="<?php echo htmlspecialchars($customer['CustomerEmail']); ?>">
+                                                        data-email="<?php echo htmlspecialchars($customer['CustomerEmail']); ?>"
+                                                        data-dues="<?php echo $customer['TotalDues']; ?>"
+                                                        data-limit="<?php echo $customer['CreditLimit']; ?>">
                                                     <?php echo htmlspecialchars($customer['CustomerName']); ?> 
                                                     (<?php echo htmlspecialchars($customer['CustomerContact']); ?>)
+                                                    <?php if ($customer['CreditLimit'] > 0): ?>
+                                                        - Plafond: <?php echo number_format($customer['CreditLimit'], 0, ',', ' '); ?> GNF
+                                                    <?php endif; ?>
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
+                                        <button type="button" class="credit-check-button" id="check_credit_btn" onclick="checkCustomerCredit()">
+                                            💳 Vérifier Crédit
+                                        </button>
                                     </div>
                                 </div>
                                 
@@ -982,6 +1233,9 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                     <p><strong>Téléphone :</strong> <span id="selected_contact"></span></p>
                                     <p><strong>Email :</strong> <span id="selected_email"></span></p>
                                 </div>
+                                
+                                <!-- Widget d'information crédit -->
+                                <div id="credit_widget_container"></div>
                             </div>
                             
                             <!-- Section nouveau client -->
@@ -996,6 +1250,9 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                     <label class="control-label">Numéro de Mobile :</label>
                                     <div class="controls">
                                         <input type="tel" class="span6" name="mobilenumber" id="new_customer_mobile" pattern="^(\+?224)?6[0-9]{8}$" placeholder="623XXXXXXXX" />
+                                        <button type="button" class="credit-check-button" onclick="checkNewCustomerCredit()">
+                                            💳 Vérifier Crédit
+                                        </button>
                                     </div>
                                 </div>
                                 <div class="control-group">
@@ -1010,6 +1267,20 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                         <textarea name="customeraddress" class="span6" rows="2" id="new_customer_address"></textarea>
                                     </div>
                                 </div>
+                                
+                                <!-- Widget d'information crédit pour nouveau client -->
+                                <div id="new_credit_widget_container"></div>
+                            </div>
+                            
+                            <!-- Alertes de crédit -->
+                            <div id="credit_alert" class="credit-alert">
+                                <strong><i class="icon-warning-sign"></i> ATTENTION - PLAFOND DÉPASSÉ</strong>
+                                <div id="credit_alert_message"></div>
+                            </div>
+                            
+                            <div id="credit_ok" class="credit-ok">
+                                <strong><i class="icon-ok"></i> CRÉDIT VÉRIFIÉ</strong>
+                                <div id="credit_ok_message"></div>
                             </div>
                         </div>
                         
@@ -1025,7 +1296,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                         <div class="control-group">
                             <label class="control-label">Montant Payé Maintenant :</label>
                             <div class="controls">
-                                <input type="number" name="paid" step="any" value="0" class="span6" />
+                                <input type="number" name="paid" id="paid_amount" step="any" value="0" class="span6" onchange="updateCreditCheck()" />
                                 <p style="font-size: 12px; color: #666;">(Laissez 0 si rien n'est payé maintenant)</p>
                             </div>
                         </div>
@@ -1047,8 +1318,8 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                         </div>
   
                         <div class="form-actions" style="text-align:center;">
-                            <button class="btn btn-primary" type="submit" name="submit" <?php echo $hasStockIssue ? 'disabled' : ''; ?>>
-                                <i class="icon-ok"></i> Valider & Créer la Facture avec Échéances
+                            <button class="btn btn-primary" type="submit" name="submit" id="submit_button" <?php echo $hasStockIssue ? 'disabled' : ''; ?>>
+                                <i class="icon-ok"></i> 💳 Valider & Créer la Facture (Vérif. Plafond)
                             </button>
                         </div>
                     </form>
@@ -1145,7 +1416,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                         ?>
                                         <tr>
                                             <th colspan="5" style="text-align: right; font-weight: bold;">Total Général</th>
-                                            <th colspan="4" style="text-align: center; font-weight: bold;"><?php echo number_format($grandTotal, 2); ?></th>
+                                            <th colspan="4" style="text-align: center; font-weight: bold;" id="grand_total_display"><?php echo number_format($grandTotal, 2); ?></th>
                                         </tr>
                                         <tr>
                                             <th colspan="5" style="text-align: right; font-weight: bold;">
@@ -1154,11 +1425,11 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                                     (<?php echo $discountValue; ?>%)
                                                 <?php endif; ?>
                                             </th>
-                                            <th colspan="4" style="text-align: center; font-weight: bold;"><?php echo number_format($discount, 2); ?></th>
+                                            <th colspan="4" style="text-align: center; font-weight: bold;" id="discount_display"><?php echo number_format($discount, 2); ?></th>
                                         </tr>
                                         <tr>
                                             <th colspan="5" style="text-align: right; font-weight: bold; color: green;">Total Net</th>
-                                            <th colspan="4" style="text-align: center; font-weight: bold; color: green;"><?php echo number_format($netTotal, 2); ?></th>
+                                            <th colspan="4" style="text-align: center; font-weight: bold; color: green;" id="net_total_display"><?php echo number_format($netTotal, 2); ?></th>
                                         </tr>
                                         <?php
                                     } else {
@@ -1190,8 +1461,14 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
     <script src="js/matrix.tables.js"></script>
 
     <script>
+    // Variables globales pour les totaux
+    var grandTotal = <?php echo $grandTotal ?? 0; ?>;
+    var discount = <?php echo $discount ?? 0; ?>;
+    var netTotal = <?php echo isset($netTotal) ? $netTotal : 0; ?>;
+    var lastCreditCheck = null;
+    
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('🔧 JavaScript de dettecart.php initialisé');
+        console.log('🔧 JavaScript de dettecart.php initialisé avec vérification crédit');
         
         // Gestion des types de clients - VERSION CORRIGÉE
         const existingRadio = document.getElementById('existing_customer_radio');
@@ -1229,6 +1506,9 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                 const mobileField = document.getElementById('new_customer_mobile');
                 if (nameField) nameField.required = false;
                 if (mobileField) mobileField.required = false;
+                
+                // Clear new customer credit widgets
+                document.getElementById('new_credit_widget_container').innerHTML = '';
             } else if (newRadio && newRadio.checked) {
                 console.log('Mode: Nouveau client');
                 if (existingSection) {
@@ -1246,7 +1526,13 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                 const mobileField = document.getElementById('new_customer_mobile');
                 if (nameField) nameField.required = true;
                 if (mobileField) mobileField.required = true;
+                
+                // Clear existing customer credit widgets
+                document.getElementById('credit_widget_container').innerHTML = '';
             }
+            
+            // Clear credit alerts
+            hideCreditAlerts();
         }
         
         // Attacher les événements
@@ -1286,8 +1572,13 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                     if (emailSpan) emailSpan.textContent = customerEmail || 'Non renseigné';
                     
                     customerInfo.style.display = 'block';
+                    
+                    // Auto-check credit for existing customer
+                    setTimeout(checkCustomerCredit, 500);
                 } else if (customerInfo) {
                     customerInfo.style.display = 'none';
+                    document.getElementById('credit_widget_container').innerHTML = '';
+                    hideCreditAlerts();
                 }
             });
         }
@@ -1337,7 +1628,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
             });
         }
         
-        // Validation du formulaire
+        // Validation du formulaire avec vérification crédit
         const form = document.querySelector('form[name="submit"]');
         if (form) {
             form.addEventListener('submit', function(e) {
@@ -1371,6 +1662,21 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                             return false;
                         }
                     }
+                    
+                    // Vérification finale du crédit avant soumission
+                    if (lastCreditCheck && !lastCreditCheck.allowed) {
+                        const confirmSubmit = confirm(
+                            '⚠️ ATTENTION: Le plafond de crédit sera dépassé!\n\n' +
+                            lastCreditCheck.message + '\n\n' +
+                            'Voulez-vous vraiment continuer?\n' +
+                            '(La vente sera refusée par le système)'
+                        );
+                        
+                        if (!confirmSubmit) {
+                            e.preventDefault();
+                            return false;
+                        }
+                    }
                 } else {
                     alert('Veuillez sélectionner le type de client');
                     e.preventDefault();
@@ -1381,6 +1687,152 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
         
         console.log('✅ Tous les gestionnaires d\'événements installés');
     });
+    
+    // Fonctions de vérification de crédit
+    function checkCustomerCredit() {
+        const customerSelect = document.getElementById('customer_select');
+        if (!customerSelect || !customerSelect.value) {
+            alert('Veuillez sélectionner un client');
+            return;
+        }
+        
+        const selectedOption = customerSelect.options[customerSelect.selectedIndex];
+        const customerContact = selectedOption.getAttribute('data-contact');
+        
+        performCreditCheck(customerContact, 'existing');
+    }
+    
+    function checkNewCustomerCredit() {
+        const mobileInput = document.getElementById('new_customer_mobile');
+        if (!mobileInput || !mobileInput.value.trim()) {
+            alert('Veuillez entrer un numéro de téléphone');
+            return;
+        }
+        
+        const customerContact = mobileInput.value.replace(/[^0-9+]/g, '');
+        const nimbaFormats = /^(\+?224)?6[0-9]{8}$/;
+        
+        if (!nimbaFormats.test(customerContact)) {
+            alert('Format de numéro invalide. Utilisez: 623XXXXXXXX');
+            return;
+        }
+        
+        performCreditCheck(customerContact, 'new');
+    }
+    
+    function performCreditCheck(customerContact, customerType) {
+        const paidAmount = parseFloat(document.getElementById('paid_amount').value) || 0;
+        const orderAmount = Math.max(0, netTotal - paidAmount);
+        
+        // Show loading
+        const widgetContainer = customerType === 'existing' ? 
+            document.getElementById('credit_widget_container') : 
+            document.getElementById('new_credit_widget_container');
+        
+        widgetContainer.innerHTML = '<div style="padding: 10px; text-align: center;"><i class="icon-spinner icon-spin"></i> Vérification du crédit en cours...</div>';
+        
+        // AJAX request
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', 'dettecart.php', true);
+        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+        
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    lastCreditCheck = response;
+                    displayCreditResult(response, customerType);
+                } catch (e) {
+                    console.error('Erreur de parsing JSON:', e);
+                    widgetContainer.innerHTML = '<div style="color: red;">Erreur lors de la vérification du crédit</div>';
+                }
+            }
+        };
+        
+        const postData = 'check_credit=1&customer_contact=' + encodeURIComponent(customerContact) + '&order_amount=' + orderAmount;
+        xhr.send(postData);
+    }
+    
+    function displayCreditResult(result, customerType) {
+        const widgetContainer = customerType === 'existing' ? 
+            document.getElementById('credit_widget_container') : 
+            document.getElementById('new_credit_widget_container');
+        
+        let html = '<div class="credit-info-widget">';
+        html += '<h6><i class="icon-credit-card"></i> Vérification Crédit - ' + (result.customer_name || 'Client') + '</h6>';
+        
+        if (result.credit_limit > 0) {
+            const usagePercent = Math.round((result.current_dues / result.credit_limit) * 100);
+            const statusClass = usagePercent > 80 ? 'danger' : (usagePercent > 60 ? 'warning' : 'success');
+            
+            html += '<div class="credit-bar alert alert-' + statusClass + '">';
+            html += '<strong>Plafond :</strong> ' + formatNumber(result.credit_limit) + ' GNF<br>';
+            html += '<strong>Dette actuelle :</strong> ' + formatNumber(result.current_dues) + ' GNF<br>';
+            html += '<strong>Crédit disponible :</strong> ' + formatNumber(result.remaining_credit) + ' GNF<br>';
+            html += '<strong>Utilisation :</strong> ' + usagePercent + '%';
+            html += '</div>';
+        } else {
+            html += '<div class="alert alert-info">';
+            html += '<strong>Aucune limite de crédit</strong><br>';
+            html += '<strong>Dette actuelle :</strong> ' + formatNumber(result.current_dues) + ' GNF';
+            html += '</div>';
+        }
+        
+        html += '</div>';
+        widgetContainer.innerHTML = html;
+        
+        // Show credit status alerts
+        showCreditAlerts(result);
+    }
+    
+    function showCreditAlerts(result) {
+        const alertDiv = document.getElementById('credit_alert');
+        const okDiv = document.getElementById('credit_ok');
+        const alertMessage = document.getElementById('credit_alert_message');
+        const okMessage = document.getElementById('credit_ok_message');
+        
+        if (result.allowed) {
+            alertDiv.style.display = 'none';
+            okDiv.style.display = 'block';
+            okMessage.innerHTML = result.message;
+            
+            if (result.credit_limit > 0) {
+                okMessage.innerHTML += '<br>Crédit restant après cette commande: ' + formatNumber(result.remaining_credit - (netTotal - (parseFloat(document.getElementById('paid_amount').value) || 0))) + ' GNF';
+            }
+        } else {
+            okDiv.style.display = 'none';
+            alertDiv.style.display = 'block';
+            alertMessage.innerHTML = result.message;
+            alertMessage.innerHTML += '<br><strong>Solutions:</strong> Augmenter le paiement ou modifier le plafond client';
+        }
+    }
+    
+    function hideCreditAlerts() {
+        document.getElementById('credit_alert').style.display = 'none';
+        document.getElementById('credit_ok').style.display = 'none';
+    }
+    
+    function updateCreditCheck() {
+        // Re-run credit check when payment amount changes
+        const existingRadio = document.getElementById('existing_customer_radio');
+        const newRadio = document.getElementById('new_customer_radio');
+        
+        if (existingRadio && existingRadio.checked) {
+            const customerSelect = document.getElementById('customer_select');
+            if (customerSelect && customerSelect.value) {
+                setTimeout(checkCustomerCredit, 100);
+            }
+        } else if (newRadio && newRadio.checked) {
+            const mobileInput = document.getElementById('new_customer_mobile');
+            if (mobileInput && mobileInput.value.trim()) {
+                setTimeout(checkNewCustomerCredit, 100);
+            }
+        }
+    }
+    
+    function formatNumber(num) {
+        return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    }
     </script>
 </body>
 </html>

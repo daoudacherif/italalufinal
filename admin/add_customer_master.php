@@ -15,7 +15,7 @@ $error_message = '';
 // Check if tblcustomer_master exists, if not create it
 $tableCheck = mysqli_query($con, "SHOW TABLES LIKE 'tblcustomer_master'");
 if (mysqli_num_rows($tableCheck) == 0) {
-    // Create the table
+    // Create the table with credit limit
     $createTable = "
     CREATE TABLE `tblcustomer_master` (
       `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -27,6 +27,7 @@ if (mysqli_num_rows($tableCheck) == 0) {
       `Status` enum('active','inactive') DEFAULT 'active',
       `TotalPurchases` decimal(12,2) DEFAULT 0.00 COMMENT 'Total lifetime purchases',
       `TotalDues` decimal(12,2) DEFAULT 0.00 COMMENT 'Current outstanding amount',
+      `CreditLimit` decimal(12,2) DEFAULT 0.00 COMMENT 'Credit limit for customer',
       `LastPurchaseDate` timestamp NULL DEFAULT NULL,
       `Notes` text DEFAULT NULL,
       PRIMARY KEY (`id`),
@@ -42,6 +43,17 @@ if (mysqli_num_rows($tableCheck) == 0) {
     } else {
         $error_message = 'Erreur lors de la création de la table: ' . mysqli_error($con);
     }
+} else {
+    // Check if CreditLimit column exists, if not add it
+    $columnCheck = mysqli_query($con, "SHOW COLUMNS FROM tblcustomer_master LIKE 'CreditLimit'");
+    if (mysqli_num_rows($columnCheck) == 0) {
+        $addColumn = "ALTER TABLE `tblcustomer_master` ADD `CreditLimit` decimal(12,2) DEFAULT 0.00 COMMENT 'Credit limit for customer' AFTER `TotalDues`";
+        if (mysqli_query($con, $addColumn)) {
+            $success_message = 'Colonne plafond de crédit ajoutée avec succès. ';
+        } else {
+            $error_message = 'Erreur lors de l\'ajout de la colonne plafond: ' . mysqli_error($con);
+        }
+    }
 }
 
 // Ajouter un nouveau client
@@ -50,12 +62,15 @@ if (isset($_POST['add_customer'])) {
     $mobile = preg_replace('/[^0-9+]/', '', $_POST['customer_mobile']);
     $email = mysqli_real_escape_string($con, trim($_POST['customer_email']));
     $address = mysqli_real_escape_string($con, trim($_POST['customer_address']));
+    $creditLimit = floatval($_POST['credit_limit']); // Nouveau champ plafond
     
     // Validation
     if (empty($name) || empty($mobile)) {
         $error_message = 'Le nom et le numéro de téléphone sont obligatoires';
     } elseif (!preg_match('/^(\+?224)?6[0-9]{8}$/', $mobile)) {
         $error_message = 'Format de numéro invalide. Utilisez le format: 623XXXXXXXX';
+    } elseif ($creditLimit < 0) {
+        $error_message = 'Le plafond de crédit ne peut pas être négatif';
     } else {
         // Vérifier si le client existe déjà dans la table master
         $checkQuery = mysqli_query($con, "SELECT id FROM tblcustomer_master WHERE CustomerContact='$mobile' LIMIT 1");
@@ -66,8 +81,8 @@ if (isset($_POST['add_customer'])) {
             if (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                 $error_message = 'Format d\'email invalide';
             } else {
-                $insertQuery = "INSERT INTO tblcustomer_master (CustomerName, CustomerContact, CustomerEmail, CustomerAddress, CustomerRegdate) 
-                                VALUES ('$name', '$mobile', '$email', '$address', NOW())";
+                $insertQuery = "INSERT INTO tblcustomer_master (CustomerName, CustomerContact, CustomerEmail, CustomerAddress, CreditLimit, CustomerRegdate) 
+                                VALUES ('$name', '$mobile', '$email', '$address', '$creditLimit', NOW())";
                 
                 if (mysqli_query($con, $insertQuery)) {
                     $success_message .= 'Client ajouté avec succès dans le répertoire client';
@@ -86,12 +101,14 @@ $totalCustomers = 0;
 $todayCustomers = 0;
 $totalBills = 0;
 $totalRevenue = 0;
+$totalCreditLimit = 0;
 
 // Check if table exists before querying
 $tableCheck = mysqli_query($con, "SHOW TABLES LIKE 'tblcustomer_master'");
 if (mysqli_num_rows($tableCheck) > 0) {
     $totalCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer_master"))['count'];
     $todayCustomers = mysqli_fetch_assoc(mysqli_query($con, "SELECT COUNT(*) as count FROM tblcustomer_master WHERE DATE(CustomerRegdate) = CURDATE()"))['count'];
+    $totalCreditLimit = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(CreditLimit) as total FROM tblcustomer_master"))['total'];
 }
 
 // Statistiques du système de facturation existant
@@ -122,6 +139,12 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
         .billing-stats {
             background-color: #f0f8e7;
             border-left: 4px solid #28a745;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .credit-stats {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
             padding: 15px;
             margin-bottom: 20px;
         }
@@ -190,6 +213,19 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
             margin-bottom: 20px;
             border-radius: 4px;
         }
+        .credit-limit-warning {
+            background-color: #fff5f5;
+            border: 1px solid #fed7d7;
+            color: #c53030;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: none;
+        }
+        .currency-symbol {
+            font-weight: bold;
+            color: #666;
+        }
     </style>
 </head>
 <body>
@@ -226,6 +262,12 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
                     <i class="icon-calendar"></i>
                     <strong>Nouveaux aujourd'hui:</strong> <?php echo $todayCustomers; ?>
                 </span>
+            </div>
+
+            <!-- Statistiques Plafond de Crédit -->
+            <div class="credit-stats">
+                <i class="icon-credit-card"></i> 
+                <strong>Plafond Total Accordé:</strong> <?php echo number_format($totalCreditLimit ?: 0); ?> GNF
             </div>
 
             <!-- Statistiques Facturation -->
@@ -308,6 +350,26 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
                                     </div>
                                     
                                     <div class="control-group">
+                                        <label class="control-label">Plafond de Crédit</label>
+                                        <div class="controls">
+                                            <div class="input-append">
+                                                <input type="number" name="credit_limit" id="credit_limit" 
+                                                       class="span6" min="0" step="1000"
+                                                       placeholder="0"
+                                                       value="<?php echo isset($_POST['credit_limit']) ? htmlspecialchars($_POST['credit_limit']) : '0'; ?>">
+                                                <span class="add-on currency-symbol">GNF</span>
+                                            </div>
+                                            <div class="form-validation" id="credit_validation">
+                                                <small class="muted">Montant maximum que le client peut devoir (0 = aucune limite)</small>
+                                            </div>
+                                            <div class="credit-limit-warning" id="credit_warning">
+                                                <i class="icon-warning-sign"></i>
+                                                <strong>Attention:</strong> Un plafond élevé présente des risques financiers. Assurez-vous de la solvabilité du client.
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
                                         <label class="control-label">Adresse Physique</label>
                                         <div class="controls">
                                             <textarea name="customer_address" id="customer_address" 
@@ -355,11 +417,19 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
                                 <li>Les numéros doivent commencer par 6</li>
                             </ul>
                             
+                            <h6><i class="icon-credit-card"></i> Plafond de Crédit</h6>
+                            <ul>
+                                <li><strong>0 GNF :</strong> Aucune limite de crédit</li>
+                                <li><strong>&gt; 0 :</strong> Montant maximum de dette autorisé</li>
+                                <li>Le système empêchera les ventes si le plafond est dépassé</li>
+                                <li>Recommandé : 50 000 à 500 000 GNF selon le client</li>
+                            </ul>
+                            
                             <h6><i class="icon-info-sign"></i> Système</h6>
                             <p>Cette page gère le <strong>répertoire client</strong> principal. Vos factures existantes restent intactes.</p>
                             
                             <h6><i class="icon-link"></i> Intégration</h6>
-                            <p>Les clients créés ici seront automatiquement liés aux futures factures.</p>
+                            <p>Les clients créés ici seront automatiquement liés aux futures factures avec contrôle du plafond.</p>
                         </div>
                     </div>
 
@@ -379,6 +449,10 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
                         <div class="preview-field">
                             <span class="preview-label">Email :</span>
                             <span id="preview_email">-</span>
+                        </div>
+                        <div class="preview-field">
+                            <span class="preview-label">Plafond :</span>
+                            <span id="preview_credit" class="currency-symbol">0 GNF</span>
                         </div>
                         <div class="preview-field">
                             <span class="preview-label">Adresse :</span>
@@ -451,22 +525,53 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
                 updatePreview();
             });
             
+            // Validation du plafond de crédit
+            $('#credit_limit').on('input blur', function() {
+                const value = parseFloat($(this).val()) || 0;
+                const validation = $('#credit_validation');
+                const warning = $('#credit_warning');
+                
+                if (value < 0) {
+                    validation.html('<span class="validation-error">Le plafond ne peut pas être négatif</span>');
+                    warning.hide();
+                } else if (value === 0) {
+                    validation.html('<span class="validation-success">✓ Aucune limite de crédit</span>');
+                    warning.hide();
+                } else if (value > 1000000) {
+                    validation.html('<span class="validation-error">Plafond très élevé - Vérifiez la solvabilité</span>');
+                    warning.show();
+                } else if (value > 500000) {
+                    validation.html('<span class="validation-success">✓ Plafond élevé défini</span>');
+                    warning.show();
+                } else {
+                    validation.html('<span class="validation-success">✓ Plafond défini: ' + formatNumber(value) + ' GNF</span>');
+                    warning.hide();
+                }
+                updatePreview();
+            });
+            
             // Mise à jour de l'aperçu
             $('#customer_address').on('input', updatePreview);
+            
+            function formatNumber(num) {
+                return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+            }
             
             function updatePreview() {
                 const name = $('#customer_name').val().trim();
                 const mobile = $('#customer_mobile').val().trim();
                 const email = $('#customer_email').val().trim();
                 const address = $('#customer_address').val().trim();
+                const creditLimit = parseFloat($('#credit_limit').val()) || 0;
                 
                 $('#preview_name').text(name || '-');
                 $('#preview_mobile').text(mobile || '-');
                 $('#preview_email').text(email || '-');
+                $('#preview_credit').text(formatNumber(creditLimit) + ' GNF');
                 $('#preview_address').text(address || '-');
                 
                 // Afficher l'aperçu si au moins un champ est rempli
-                if (name || mobile || email || address) {
+                if (name || mobile || email || address || creditLimit > 0) {
                     $('#customerPreview').show();
                 } else {
                     $('#customerPreview').hide();
@@ -478,6 +583,7 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
                 const name = $('#customer_name').val().trim();
                 const mobile = $('#customer_mobile').val().trim();
                 const email = $('#customer_email').val().trim();
+                const creditLimit = parseFloat($('#credit_limit').val()) || 0;
                 
                 let isValid = true;
                 let errorMessage = '';
@@ -500,14 +606,24 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
                     isValid = false;
                 }
                 
+                if (creditLimit < 0) {
+                    errorMessage += 'Le plafond de crédit ne peut pas être négatif.\n';
+                    isValid = false;
+                }
+                
                 if (!isValid) {
                     alert(errorMessage);
                     e.preventDefault();
                     return false;
                 }
                 
-                // Confirmation avant ajout
-                const confirmMessage = `Confirmer l'ajout du client :\n\nNom: ${name}\nTéléphone: ${mobile}\nEmail: ${email || 'Non renseigné'}`;
+                // Confirmation avant ajout avec plafond
+                let confirmMessage = `Confirmer l'ajout du client :\n\nNom: ${name}\nTéléphone: ${mobile}\nEmail: ${email || 'Non renseigné'}\nPlafond de crédit: ${formatNumber(creditLimit)} GNF`;
+                
+                if (creditLimit > 500000) {
+                    confirmMessage += '\n\n⚠️ ATTENTION: Plafond de crédit élevé!';
+                }
+                
                 if (!confirm(confirmMessage)) {
                     e.preventDefault();
                     return false;
@@ -517,8 +633,10 @@ $totalRevenue = mysqli_fetch_assoc(mysqli_query($con, "SELECT SUM(FinalAmount) a
         
         function resetForm() {
             $('#customerPreview').hide();
+            $('#credit_warning').hide();
             $('.form-validation').html('');
             $('#mobile_validation').html('<small class="muted">Format: 623XXXXXXXX (numéros Guinéens)</small>');
+            $('#credit_validation').html('<small class="muted">Montant maximum que le client peut devoir (0 = aucune limite)</small>');
         }
     </script>
 </body>
