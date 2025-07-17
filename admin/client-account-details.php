@@ -499,41 +499,6 @@ if (mysqli_num_rows($clientResult) > 0) {
   </div><!-- container-fluid -->
 </div><!-- content -->
 
-<!-- Modal de paiement -->
-<div id="paymentModal" class="payment-modal">
-  <div class="payment-modal-content">
-    <span class="close" onclick="closePaymentModal()">&times;</span>
-    <h3>Enregistrer un Paiement</h3>
-    <form id="paymentForm">
-      <div class="control-group">
-        <label>Client:</label>
-        <input type="text" value="<?php echo htmlspecialchars($customerName); ?>" readonly class="span12">
-      </div>
-      
-      <div class="control-group">
-        <label>Facture:</label>
-        <input type="text" id="paymentInvoice" readonly class="span12">
-      </div>
-      
-      <div class="control-group">
-        <label>Montant dû:</label>
-        <input type="text" id="paymentDue" readonly class="span12">
-      </div>
-      
-      <div class="control-group">
-        <label>Montant payé:</label>
-        <input type="number" id="paymentAmount" step="any" min="0" required class="span12">
-      </div>
-      
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary">
-          <i class="icon-ok"></i> Enregistrer
-        </button>
-        <button type="button" onclick="closePaymentModal()" class="btn">Annuler</button>
-      </div>
-    </form>
-  </div>
-</div>
 
 <!-- Modal de message -->
 <div id="messageModal" class="payment-modal">
