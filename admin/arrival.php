@@ -32,6 +32,44 @@ if ($tableCheck) {
     }
 }
 
+// NOUVELLE FONCTION : Mise à jour automatique du prix d'achat moyen
+function updateProductCostPrice($con, $productId) {
+    // Calculer le prix d'achat moyen pondéré des 5 derniers arrivages
+    $sql = "
+        SELECT 
+            AVG(Cost / Quantity) as avgCost,
+            MAX(ArrivalDate) as lastUpdate
+        FROM (
+            SELECT Cost, Quantity, ArrivalDate
+            FROM tblproductarrivals 
+            WHERE ProductID = $productId 
+            AND Quantity > 0 
+            AND Cost > 0
+            ORDER BY ArrivalDate DESC 
+            LIMIT 5
+        ) recent_arrivals
+    ";
+    
+    $result = mysqli_query($con, $sql);
+    if ($result && mysqli_num_rows($result) > 0) {
+        $data = mysqli_fetch_assoc($result);
+        $avgCost = $data['avgCost'] ? $data['avgCost'] : 0;
+        
+        // Mettre à jour le produit
+        $updateSql = "
+            UPDATE tblproducts 
+            SET 
+                CostPrice = $avgCost,
+                LastCostUpdate = NOW()
+            WHERE ID = $productId
+        ";
+        
+        mysqli_query($con, $updateSql);
+        return $avgCost;
+    }
+    return 0;
+}
+
 // 1) Handle arrival submission (multiple products)
 if (isset($_POST['submit'])) {
     $arrivalDate = $_POST['arrivaldate'];
@@ -101,6 +139,8 @@ if (isset($_POST['submit'])) {
                 
                 if ($updateResult) {
                     if (mysqli_affected_rows($con) > 0) {
+                        // NOUVEAU : Mise à jour automatique du prix d'achat
+                        $newCostPrice = updateProductCostPrice($con, $productID);
                         $successCount++;
                     } else {
                         $errorCount++;
@@ -180,7 +220,10 @@ if (isset($_POST['submit_single'])) {
         if ($updateResult) {
             // Check if any rows were actually updated
             if (mysqli_affected_rows($con) > 0) {
-                echo "<script>alert('Arrivage enregistré avec succès! Stock: $currentStock -> $newStock. Coût: $cost. Bon: $deliveryNote');</script>";
+                // NOUVEAU : Mise à jour automatique du prix d'achat
+                $newCostPrice = updateProductCostPrice($con, $productID);
+                
+                echo "<script>alert('Arrivage enregistré avec succès! Stock: $currentStock -> $newStock. Coût: $cost. Nouveau prix d\\'achat moyen: " . number_format($newCostPrice, 2) . ". Bon: $deliveryNote');</script>";
             } else {
                 echo "<script>alert('Produit trouvé mais stock non modifié. Vérifiez que l\\'ID du produit est correct.');</script>";
             }
@@ -915,6 +958,127 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
         </div>
       </div>
     </div>
+
+    <!-- NOUVELLE SECTION : APERÇU DES MARGES -->
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="widget-box">
+          <div class="widget-title">
+            <span class="icon"><i class="icon-calculator"></i></span>
+            <h5>💰 Impact sur les Marges</h5>
+            <a href="margins.php" class="btn btn-small btn-info" style="float:right;margin:3px;">
+              <i class="icon-external-link"></i> Voir Toutes les Marges
+            </a>
+          </div>
+          <div class="widget-content nopadding">
+            <?php
+            // Requête pour les produits récemment arrivés avec calcul de marge
+            $sqlRecentMargins = "
+                SELECT DISTINCT
+                    p.ID,
+                    p.ProductName,
+                    p.Price as SalePrice,
+                    p.CostPrice,
+                    p.TargetMargin,
+                    CASE 
+                        WHEN p.CostPrice > 0 THEN 
+                            ROUND(((p.Price - p.CostPrice) / p.Price) * 100, 2)
+                        ELSE 0 
+                    END as ActualMarginPercent,
+                    CASE 
+                        WHEN p.CostPrice > 0 THEN 
+                            ROUND(p.Price - p.CostPrice, 2)
+                        ELSE 0 
+                    END as ProfitPerUnit,
+                    p.LastCostUpdate
+                FROM tblproducts p
+                INNER JOIN tblproductarrivals a ON a.ProductID = p.ID
+                WHERE a.ArrivalDate >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                ORDER BY p.LastCostUpdate DESC
+                LIMIT 10
+            ";
+            $resRecentMargins = mysqli_query($con, $sqlRecentMargins);
+            ?>
+            
+            <table class="table table-bordered table-striped">
+              <thead>
+                <tr>
+                  <th>Produit</th>
+                  <th>Prix Vente</th>
+                  <th>Prix Achat Moyen</th>
+                  <th>Marge Réelle</th>
+                  <th>Marge Cible</th>
+                  <th>Profit/Unité</th>
+                  <th>Statut</th>
+                  <th>Dernière MAJ</th>
+                </tr>
+              </thead>
+              <tbody>
+                <?php
+                if (mysqli_num_rows($resRecentMargins) > 0) {
+                    while ($margin = mysqli_fetch_assoc($resRecentMargins)) {
+                        // Déterminer le statut de la marge
+                        $statusClass = '';
+                        $statusText = '';
+                        
+                        if ($margin['CostPrice'] == 0) {
+                            $statusClass = 'label-info';
+                            $statusText = 'Prix d\'achat en attente';
+                        } elseif ($margin['TargetMargin'] == 0) {
+                            $statusClass = 'label-warning';
+                            $statusText = 'Marge cible non définie';
+                        } elseif ($margin['ActualMarginPercent'] >= $margin['TargetMargin']) {
+                            $statusClass = 'label-success';
+                            $statusText = 'Objectif atteint';
+                        } else {
+                            $statusClass = 'label-important';
+                            $statusText = 'Sous l\'objectif';
+                        }
+                ?>
+                <tr>
+                  <td><strong><?php echo $margin['ProductName']; ?></strong></td>
+                  <td><?php echo number_format($margin['SalePrice'], 2); ?></td>
+                  <td><?php echo number_format($margin['CostPrice'], 2); ?></td>
+                  <td>
+                    <span class="label <?php echo ($margin['ActualMarginPercent'] > 20) ? 'label-success' : (($margin['ActualMarginPercent'] > 10) ? 'label-warning' : 'label-important'); ?>">
+                      <?php echo $margin['ActualMarginPercent']; ?>%
+                    </span>
+                  </td>
+                  <td><?php echo $margin['TargetMargin'] ? $margin['TargetMargin'].'%' : '-'; ?></td>
+                  <td style="color: <?php echo ($margin['ProfitPerUnit'] > 0) ? '#28a745' : '#dc3545'; ?>; font-weight: bold;">
+                    <?php echo number_format($margin['ProfitPerUnit'], 2); ?>
+                  </td>
+                  <td>
+                    <span class="label <?php echo $statusClass; ?>"><?php echo $statusText; ?></span>
+                  </td>
+                  <td><small><?php echo $margin['LastCostUpdate'] ? date('d/m/Y H:i', strtotime($margin['LastCostUpdate'])) : '-'; ?></small></td>
+                </tr>
+                <?php
+                    }
+                } else {
+                ?>
+                <tr>
+                  <td colspan="8" style="text-align: center;">
+                    Aucun arrivage récent trouvé. Les marges seront calculées après les premiers arrivages.
+                  </td>
+                </tr>
+                <?php } ?>
+              </tbody>
+            </table>
+            
+            <div class="alert alert-info" style="margin: 10px;">
+              <strong><i class="icon-info-sign"></i> À propos des marges :</strong>
+              Les prix d'achat sont automatiquement calculés à partir de la moyenne des 5 derniers arrivages.
+              La marge réelle est calculée selon la formule : <code>(Prix Vente - Prix Achat) / Prix Vente × 100</code>
+              <br>
+              <a href="margins.php" class="btn btn-small btn-primary" style="margin-top: 5px;">
+                <i class="icon-calculator"></i> Gérer les Marges Complètes
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 <!-- Footer -->
@@ -930,7 +1094,7 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
 <script src="js/matrix.js"></script>
 <script src="js/matrix.tables.js"></script>
 <script>
-// NOUVEAUX SCRIPTS POUR LES FONCTIONNALITÉS DE LIVRAISON
+// NOUVEAUX SCRIPTS POUR LES FONCTIONNALITÉS DE LIVRAISON ET MARGES
 
 // Fonction pour générer automatiquement un numéro de bon de livraison
 function generateDeliveryNote() {
@@ -967,6 +1131,34 @@ function autoCompleteDeliveryNote() {
     });
 }
 
+// NOUVELLE FONCTION : Vérification des marges faibles
+function checkMarginAlert(productId, salePrice, costPrice) {
+    if (costPrice > 0 && salePrice > 0) {
+        const margin = ((salePrice - costPrice) / salePrice) * 100;
+        
+        if (margin < 10) {
+            const confirmed = confirm(
+                `⚠️ ATTENTION MARGE FAIBLE!\n\n` +
+                `Prix de vente: ${salePrice.toFixed(2)}\n` +
+                `Prix d'achat: ${costPrice.toFixed(2)}\n` +
+                `Marge: ${margin.toFixed(1)}%\n\n` +
+                `Cette marge est inférieure à 10%. Voulez-vous continuer?`
+            );
+            return confirmed;
+        } else if (margin < 0) {
+            const confirmed = confirm(
+                `❌ ATTENTION PERTE!\n\n` +
+                `Prix de vente: ${salePrice.toFixed(2)}\n` +
+                `Prix d'achat: ${costPrice.toFixed(2)}\n` +
+                `Perte: ${Math.abs(margin).toFixed(1)}%\n\n` +
+                `Ce prix génère une PERTE. Êtes-vous sûr de continuer?`
+            );
+            return confirmed;
+        }
+    }
+    return true;
+}
+
 // Fonction pour remplir le prix personnalisé avec le prix actuel
 function fillCustomPrice() {
   const productSelect = document.getElementById('productSelect');
@@ -986,19 +1178,83 @@ function fillCustomPrice() {
   updateSingleCost();
 }
 
-// Fonction pour calculer le coût dans le formulaire unique
+// FONCTION AMÉLIORÉE : Calculer le coût et afficher la marge
 function updateSingleCost() {
   const customPriceInput = document.getElementById('customPrice');
   const quantityInput = document.getElementById('quantity');
   const costDisplay = document.getElementById('costDisplay');
+  const productSelect = document.getElementById('productSelect');
 
-  if (!customPriceInput || !quantityInput || !costDisplay) return;
+  if (!customPriceInput || !quantityInput || !costDisplay || !productSelect) return;
 
   const customPrice = parseFloat(customPriceInput.value) || 0;
   const qty = parseFloat(quantityInput.value) || 0;
-
   const total = customPrice * qty;
+  
   costDisplay.value = total.toFixed(2);
+  
+  // NOUVEAU : Affichage de la marge en temps réel
+  const selectedOption = productSelect.options[productSelect.selectedIndex];
+  if (selectedOption && selectedOption.value) {
+    const salePrice = parseFloat(selectedOption.getAttribute('data-price')) || 0;
+    if (salePrice > 0 && customPrice > 0) {
+      const margin = ((salePrice - customPrice) / salePrice) * 100;
+      const profit = salePrice - customPrice;
+      
+      // Affichage visuel de la marge
+      let marginDisplay = document.getElementById('marginDisplay');
+      if (!marginDisplay) {
+        marginDisplay = document.createElement('div');
+        marginDisplay.id = 'marginDisplay';
+        marginDisplay.style.marginTop = '5px';
+        marginDisplay.style.fontSize = '12px';
+        marginDisplay.style.fontWeight = 'bold';
+        marginDisplay.style.padding = '5px';
+        marginDisplay.style.borderRadius = '3px';
+        costDisplay.parentNode.appendChild(marginDisplay);
+      }
+      
+      let bgColor = '';
+      let textColor = '';
+      let icon = '';
+      let status = '';
+      
+      if (margin < 0) {
+        bgColor = '#f8d7da';
+        textColor = '#721c24';
+        icon = '❌';
+        status = 'PERTE';
+      } else if (margin < 10) {
+        bgColor = '#fff3cd';
+        textColor = '#856404';
+        icon = '⚠️';
+        status = 'Faible';
+      } else if (margin < 20) {
+        bgColor = '#d1ecf1';
+        textColor = '#0c5460';
+        icon = '📉';
+        status = 'Correcte';
+      } else if (margin < 30) {
+        bgColor = '#d4edda';
+        textColor = '#155724';
+        icon = '📊';
+        status = 'Bonne';
+      } else {
+        bgColor = '#d4edda';
+        textColor = '#155724';
+        icon = '📈';
+        status = 'Excellente';
+      }
+      
+      marginDisplay.style.backgroundColor = bgColor;
+      marginDisplay.style.color = textColor;
+      marginDisplay.innerHTML = `
+        ${icon} Marge: ${margin.toFixed(1)}% (${status}) | 
+        Profit/unité: ${profit.toFixed(2)} | 
+        Total profit: ${(profit * qty).toFixed(2)}
+      `;
+    }
+  }
 }
 
 // Fonction pour mettre à jour le total du panier en temps réel
@@ -1109,6 +1365,28 @@ document.addEventListener('DOMContentLoaded', function() {
   autoCompleteDeliveryNote();
   validateDeliveryDates();
   
+  // NOUVEAU : Vérification de marge lors de la soumission du formulaire unique
+  const singleForm = document.getElementById('singleArrivalForm');
+  if (singleForm) {
+      singleForm.addEventListener('submit', function(e) {
+          const productSelect = document.getElementById('productSelect');
+          const customPriceInput = document.getElementById('customPrice');
+          
+          if (productSelect && customPriceInput) {
+              const selectedOption = productSelect.options[productSelect.selectedIndex];
+              if (selectedOption && selectedOption.value) {
+                  const salePrice = parseFloat(selectedOption.getAttribute('data-price')) || 0;
+                  const costPrice = parseFloat(customPriceInput.value) || 0;
+                  
+                  if (!checkMarginAlert(selectedOption.value, salePrice, costPrice)) {
+                      e.preventDefault();
+                      return false;
+                  }
+              }
+          }
+      });
+  }
+  
   // Synchroniser les dates initiales
   const arrivalInputs = document.querySelectorAll('input[name="arrivaldate"]');
   arrivalInputs.forEach(function(input) {
@@ -1117,7 +1395,33 @@ document.addEventListener('DOMContentLoaded', function() {
       input.dispatchEvent(event);
     }
   });
+  
+  // NOUVEAU : Animation des lignes de marge pour attirer l'attention
+  const marginRows = document.querySelectorAll('table tbody tr');
+  marginRows.forEach(function(row) {
+    const marginBadge = row.querySelector('.label-important');
+    if (marginBadge) {
+      row.style.borderLeft = '3px solid #dc3545';
+      row.style.animation = 'pulse 2s infinite';
+    }
+  });
 });
+
+// NOUVEAU : CSS pour l'animation
+const style = document.createElement('style');
+style.textContent = `
+  @keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+  }
+  
+  .margin-alert {
+    border-left: 3px solid #dc3545 !important;
+    background-color: #fff5f5 !important;
+  }
+`;
+document.head.appendChild(style);
 </script>
 </body>
 </html>
