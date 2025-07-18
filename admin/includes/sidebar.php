@@ -117,8 +117,9 @@ try {
       <ul>
         <li><a href="stock-report.php">Stock</a></li>
         <li><a href="sales-report.php">Ventes</a></li>
-        <li><a href="daily-repport.php">Journalier</a></li>
-        
+        <li><a href="daily-report.php">Journalier</a></li>
+        <li><a href="marge.php">Marge</a></li>
+
       </ul>
     </li>
    
