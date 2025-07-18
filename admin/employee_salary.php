@@ -10,77 +10,112 @@ if (strlen($_SESSION['imsaid'] == 0)) {
 }
 
 // =================================
-// 1) CALCULER LE SOLDE DE CAISSE ACTUEL
+// 1) CALCULER LE SOLDE DU JOUR UNIQUEMENT (MÊME LOGIQUE QUE TRANSACTION.PHP)
 // =================================
 
-// 1.1 Toutes les ventes (depuis le début)
-$sqlAllSales = "
-  SELECT COALESCE(SUM(c.ProductQty * p.Price), 0) AS totalSales
-  FROM tblcart c
-  JOIN tblproducts p ON p.ID = c.ProductId
-  WHERE c.IsCheckOut = '1'
+// 1.1 Ventes régulières du jour - Utilise FinalAmount (AVEC remises)
+$sqlRegularSales = "
+  SELECT COALESCE(SUM(cust.FinalAmount), 0) AS totalSales
+  FROM tblcustomer cust
+  WHERE cust.ModeofPayment != 'credit'
+    AND EXISTS (
+      SELECT 1 FROM tblcart c 
+      WHERE c.BillingId = cust.BillingNumber 
+        AND DATE(c.CartDate) = CURDATE()
+        AND c.IsCheckOut = '1'
+    )
 ";
-$resAllSales = mysqli_query($con, $sqlAllSales);
-$rowAllSales = mysqli_fetch_assoc($resAllSales);
-$totalSales = floatval($rowAllSales['totalSales']);
+$resRegularSales = mysqli_query($con, $sqlRegularSales);
+$rowRegularSales = mysqli_fetch_assoc($resRegularSales);
+$todayRegularSales = floatval($rowRegularSales['totalSales']);
 
-// 1.2 Tous les paiements clients en espèces (depuis le début)
-$sqlAllCashPayments = "
+// 1.2 Ventes à crédit du jour (pour affichage)
+$sqlCreditSales = "
+  SELECT COALESCE(SUM(cust.FinalAmount), 0) AS totalSales
+  FROM tblcustomer cust
+  WHERE cust.ModeofPayment = 'credit'
+    AND EXISTS (
+      SELECT 1 FROM tblcart c 
+      WHERE c.BillingId = cust.BillingNumber 
+        AND DATE(c.CartDate) = CURDATE()
+        AND c.IsCheckOut = '1'
+    )
+";
+$resCreditSales = mysqli_query($con, $sqlCreditSales);
+$rowCreditSales = mysqli_fetch_assoc($resCreditSales);
+$todayCreditSales = floatval($rowCreditSales['totalSales']);
+
+// 1.3 Paiements clients du jour (tous)
+$sqlCustomerPayments = "
   SELECT COALESCE(SUM(PaymentAmount), 0) AS totalPaid
   FROM tblpayments
-  WHERE PaymentMethod = 'Cash'
+  WHERE DATE(PaymentDate) = CURDATE()
 ";
-$resAllCashPayments = mysqli_query($con, $sqlAllCashPayments);
-$rowAllCashPayments = mysqli_fetch_assoc($resAllCashPayments);
-$totalCashPayments = floatval($rowAllCashPayments['totalPaid']);
+$resCustomerPayments = mysqli_query($con, $sqlCustomerPayments);
+$rowCustomerPayments = mysqli_fetch_assoc($resCustomerPayments);
+$todayCustomerPayments = floatval($rowCustomerPayments['totalPaid']);
 
-// 1.3 Toutes les transactions manuelles de caisse (depuis le début)
-$sqlAllTransactions = "
-  SELECT
-    COALESCE(SUM(CASE WHEN TransType='IN' THEN Amount ELSE 0 END), 0) AS allDeposits,
-    COALESCE(SUM(CASE WHEN TransType='OUT' THEN Amount ELSE 0 END), 0) AS allWithdrawals
-  FROM tblcashtransactions
+// 1.4 Paiements par méthode pour analyse
+$sqlPaymentMethods = "
+  SELECT 
+    PaymentMethod,
+    COUNT(*) as count,
+    SUM(PaymentAmount) as total
+  FROM tblpayments
+  WHERE DATE(PaymentDate) = CURDATE()
+  GROUP BY PaymentMethod
 ";
-$resAllTransactions = mysqli_query($con, $sqlAllTransactions);
-$rowAllTransactions = mysqli_fetch_assoc($resAllTransactions);
-$allDeposits = floatval($rowAllTransactions['allDeposits']);
-$allWithdrawals = floatval($rowAllTransactions['allWithdrawals']);
+$resPaymentMethods = mysqli_query($con, $sqlPaymentMethods);
+$paymentsByMethod = [];
+$cashPayments = 0;
+while ($row = mysqli_fetch_assoc($resPaymentMethods)) {
+  $paymentsByMethod[$row['PaymentMethod']] = $row;
+  if ($row['PaymentMethod'] == 'Cash') {
+    $cashPayments = floatval($row['total']);
+  }
+}
 
-// 1.4 Tous les retours (depuis le début)
-$sqlAllReturns = "
-  SELECT COALESCE(SUM(r.Quantity * p.Price), 0) AS totalReturns
-  FROM tblreturns r
-  JOIN tblproducts p ON p.ID = r.ProductID
-";
-$resAllReturns = mysqli_query($con, $sqlAllReturns);
-$rowAllReturns = mysqli_fetch_assoc($resAllReturns);
-$totalReturns = floatval($rowAllReturns['totalReturns']);
-
-// 1.5 SOLDE TOTAL DE CAISSE (cumulatif)
-$totalCashBalance = $allDeposits + $totalSales + $totalCashPayments - ($allWithdrawals + $totalReturns);
-
-// 1.6 Calculs du jour pour affichage
-$sqlTodaySales = "
-  SELECT COALESCE(SUM(c.ProductQty * p.Price), 0) AS todaySales
-  FROM tblcart c
-  JOIN tblproducts p ON p.ID = c.ProductId
-  WHERE c.IsCheckOut = '1' AND DATE(c.CartDate) = CURDATE()
-";
-$resTodaySales = mysqli_query($con, $sqlTodaySales);
-$rowTodaySales = mysqli_fetch_assoc($resTodaySales);
-$todayRegularSales = floatval($rowTodaySales['todaySales']);
-
-$sqlTodayDeposits = "
+// 1.5 Dépôts et retraits manuels du jour
+$sqlManualTransactions = "
   SELECT
     COALESCE(SUM(CASE WHEN TransType='IN' THEN Amount ELSE 0 END), 0) AS deposits,
     COALESCE(SUM(CASE WHEN TransType='OUT' THEN Amount ELSE 0 END), 0) AS withdrawals
   FROM tblcashtransactions
   WHERE DATE(TransDate) = CURDATE()
 ";
-$resTodayDeposits = mysqli_query($con, $sqlTodayDeposits);
-$rowTodayDeposits = mysqli_fetch_assoc($resTodayDeposits);
-$todayDeposits = floatval($rowTodayDeposits['deposits']);
-$todayWithdrawals = floatval($rowTodayDeposits['withdrawals']);
+$resManualTransactions = mysqli_query($con, $sqlManualTransactions);
+$rowManualTransactions = mysqli_fetch_assoc($resManualTransactions);
+$todayDeposits = floatval($rowManualTransactions['deposits']);
+$todayWithdrawals = floatval($rowManualTransactions['withdrawals']);
+
+// 1.6 Retours du jour
+$sqlReturns = "
+  SELECT COALESCE(SUM(r.Quantity * p.Price), 0) AS totalReturns
+  FROM tblreturns r
+  JOIN tblproducts p ON p.ID = r.ProductID
+  WHERE DATE(r.ReturnDate) = CURDATE()
+";
+$resReturns = mysqli_query($con, $sqlReturns);
+$rowReturns = mysqli_fetch_assoc($resReturns);
+$todayReturns = floatval($rowReturns['totalReturns']);
+
+// 1.7 CALCUL DU SOLDE DU JOUR (MÊME FORMULE QUE TRANSACTION.PHP)
+$todayBalance = $todayDeposits + $todayRegularSales + $cashPayments - ($todayWithdrawals + $todayReturns);
+
+// 1.8 Calcul de la différence due aux remises (pour information)
+$sqlRegularSalesBeforeDiscount = "
+  SELECT COALESCE(SUM(c.ProductQty * p.Price), 0) AS totalSalesBeforeDiscount
+  FROM tblcart c
+  JOIN tblproducts p ON p.ID = c.ProductId
+  WHERE c.IsCheckOut = '1'
+    AND DATE(c.CartDate) = CURDATE()
+";
+$resRegularSalesBeforeDiscount = mysqli_query($con, $sqlRegularSalesBeforeDiscount);
+$rowRegularSalesBeforeDiscount = mysqli_fetch_assoc($resRegularSalesBeforeDiscount);
+$todayRegularSalesBeforeDiscount = floatval($rowRegularSalesBeforeDiscount['totalSalesBeforeDiscount']);
+
+// Calcul de la remise totale accordée aujourd'hui
+$todayDiscountGiven = $todayRegularSalesBeforeDiscount - $todayRegularSales;
 
 // ---------------------------------------------------------------------
 // 2) CALCULATE CURRENT MONTH SALARY OBLIGATIONS AND PAYMENTS
@@ -154,7 +189,7 @@ $sqlUnpaidEmployees = "
 $resUnpaidEmployees = mysqli_query($con, $sqlUnpaidEmployees);
 
 // ---------------------------------------------------------------------
-// 3) HANDLE NEW SALARY TRANSACTION (MODIFIÉ POUR LA CAISSE)
+// 3) HANDLE NEW SALARY TRANSACTION (MODIFIÉ POUR UTILISER LE SOLDE DU JOUR)
 // ---------------------------------------------------------------------
 
 $transactionError = '';
@@ -174,12 +209,12 @@ if (isset($_POST['submit_transaction'])) {
   } elseif ($amount <= 0) {
     $transactionError = 'Le montant doit être supérieur à 0';
   } 
-  // NOUVEAU: Vérifier le solde de caisse pour les paiements en espèces
-  elseif ($paymentMethod == 'cash' && in_array($transactionType, ['payment', 'bonus']) && $amount > $totalCashBalance) {
-    $transactionError = 'Solde en caisse insuffisant pour effectuer ce paiement en espèces ! Solde disponible: ' . number_format($totalCashBalance, 2);
+  // MODIFIÉ: Vérifier le solde du jour pour les paiements en espèces
+  elseif ($paymentMethod == 'cash' && in_array($transactionType, ['payment', 'bonus']) && $amount > $todayBalance) {
+    $transactionError = 'Solde de caisse du jour insuffisant pour effectuer ce paiement en espèces ! Solde disponible: ' . number_format($todayBalance, 2);
   } 
   else {
-    // NOUVEAU: Utiliser une transaction pour assurer la cohérence
+    // Utiliser une transaction pour assurer la cohérence
     mysqli_begin_transaction($con);
     
     try {
@@ -193,7 +228,7 @@ if (isset($_POST['submit_transaction'])) {
         throw new Exception('Erreur lors de l\'enregistrement de la transaction salariale');
       }
       
-      // 2) NOUVEAU: Si c'est un paiement en espèces, enregistrer dans la caisse
+      // 2) Si c'est un paiement en espèces, enregistrer dans la caisse
       if ($paymentMethod == 'cash') {
         // Récupérer le nom de l'employé pour le commentaire
         $sqlEmployee = "SELECT FullName, Position FROM tblemployees WHERE ID = '$employeeId' LIMIT 1";
@@ -205,7 +240,7 @@ if (isset($_POST['submit_transaction'])) {
         // Déterminer le type de transaction de caisse
         if (in_array($transactionType, ['payment', 'bonus'])) {
           // C'est une sortie de caisse
-          $newCashBalance = $totalCashBalance - $amount;
+          $newCashBalance = $todayBalance - $amount;
           $cashComment = ucfirst($transactionType) . " en espèces: " . $employeeName;
           if (!empty($employeePosition)) {
             $cashComment .= " (" . $employeePosition . ")";
@@ -216,11 +251,11 @@ if (isset($_POST['submit_transaction'])) {
           
           $sqlCashTrans = "
             INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
-            VALUES(CURDATE(), 'OUT', '$amount', '$newCashBalance', '$cashComment')
+            VALUES(NOW(), 'OUT', '$amount', '$newCashBalance', '$cashComment')
           ";
         } else {
           // Déduction ou ajustement = entrée en caisse (remboursement)
-          $newCashBalance = $totalCashBalance + $amount;
+          $newCashBalance = $todayBalance + $amount;
           $cashComment = ucfirst($transactionType) . " en espèces: " . $employeeName;
           if (!empty($employeePosition)) {
             $cashComment .= " (" . $employeePosition . ")";
@@ -231,7 +266,7 @@ if (isset($_POST['submit_transaction'])) {
           
           $sqlCashTrans = "
             INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
-            VALUES(CURDATE(), 'IN', '$amount', '$newCashBalance', '$cashComment')
+            VALUES(NOW(), 'IN', '$amount', '$newCashBalance', '$cashComment')
           ";
         }
         
@@ -239,15 +274,15 @@ if (isset($_POST['submit_transaction'])) {
           throw new Exception("Erreur lors de l'enregistrement de la transaction en caisse");
         }
         
-        // Mettre à jour le solde de caisse
-        $totalCashBalance = $newCashBalance;
+        // Mettre à jour le solde du jour
+        $todayBalance = $newCashBalance;
       }
       
       // 3) Valider la transaction
       mysqli_commit($con);
       $transactionSuccess = 'Transaction enregistrée avec succès!';
       if ($paymentMethod == 'cash') {
-        $transactionSuccess .= ' Montant déduit/ajouté à la caisse.';
+        $transactionSuccess .= ' Montant déduit/ajouté à la caisse du jour.';
       }
       echo "<script>setTimeout(function(){ window.location.href='employee-salary.php'; }, 1500);</script>";
       
@@ -296,7 +331,7 @@ if (isset($_POST['submit_employee'])) {
 }
 
 // ---------------------------------------------------------------------
-// 5) HANDLE NEW SALARY ADVANCE (MODIFIÉ POUR LA CAISSE)
+// 5) HANDLE NEW SALARY ADVANCE (MODIFIÉ POUR UTILISER LE SOLDE DU JOUR)
 // ---------------------------------------------------------------------
 
 if (isset($_POST['submit_advance'])) {
@@ -304,7 +339,7 @@ if (isset($_POST['submit_advance'])) {
   $advanceAmount = floatval($_POST['advance_amount']);
   $reason = mysqli_real_escape_string($con, $_POST['reason']);
   $monthlyDeduction = floatval($_POST['monthly_deduction']);
-  $paymentMethod = $_POST['advance_payment_method']; // NOUVEAU
+  $paymentMethod = $_POST['advance_payment_method']; 
   $approvedBy = $_SESSION['imsaid']; // Admin ID
 
   // Vérifications
@@ -317,9 +352,9 @@ if (isset($_POST['submit_advance'])) {
   } elseif ($monthlyDeduction > $advanceAmount) {
     $transactionError = 'La déduction mensuelle ne peut pas être supérieure au montant de l\'avance';
   } 
-  // NOUVEAU: Vérifier le solde de caisse pour les avances en espèces
-  elseif ($paymentMethod == 'cash' && $advanceAmount > $totalCashBalance) {
-    $transactionError = 'Solde en caisse insuffisant pour cette avance en espèces ! Solde disponible: ' . number_format($totalCashBalance, 2);
+  // MODIFIÉ: Vérifier le solde du jour pour les avances en espèces
+  elseif ($paymentMethod == 'cash' && $advanceAmount > $todayBalance) {
+    $transactionError = 'Solde de caisse du jour insuffisant pour cette avance en espèces ! Solde disponible: ' . number_format($todayBalance, 2);
   } 
   else {
     // Vérifier si l'employé a déjà une avance active
@@ -350,7 +385,7 @@ if (isset($_POST['submit_advance'])) {
       } elseif ($monthlyDeduction > ($baseSalary * 0.3)) {
         $transactionError = 'La déduction mensuelle ne peut pas dépasser 30% du salaire (' . number_format($baseSalary * 0.3, 2) . ')';
       } else {
-        // NOUVEAU: Utiliser une transaction pour la cohérence
+        // Utiliser une transaction pour la cohérence
         mysqli_begin_transaction($con);
         
         try {
@@ -367,14 +402,14 @@ if (isset($_POST['submit_advance'])) {
             throw new Exception('Erreur lors de l\'enregistrement de l\'avance');
           }
           
-          // 2) NOUVEAU: Si c'est en espèces, enregistrer la sortie de caisse
+          // 2) Si c'est en espèces, enregistrer la sortie de caisse
           if ($paymentMethod == 'cash') {
-            $newCashBalance = $totalCashBalance - $advanceAmount;
+            $newCashBalance = $todayBalance - $advanceAmount;
             $cashComment = "Avance sur salaire: " . $employeeName . " (" . $employeePosition . ") - " . $reason;
             
             $sqlCashTrans = "
               INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
-              VALUES(CURDATE(), 'OUT', '$advanceAmount', '$newCashBalance', '$cashComment')
+              VALUES(NOW(), 'OUT', '$advanceAmount', '$newCashBalance', '$cashComment')
             ";
             
             if (!mysqli_query($con, $sqlCashTrans)) {
@@ -382,14 +417,14 @@ if (isset($_POST['submit_advance'])) {
             }
             
             // Mettre à jour le solde
-            $totalCashBalance = $newCashBalance;
+            $todayBalance = $newCashBalance;
           }
           
           // 3) Valider la transaction
           mysqli_commit($con);
           $transactionSuccess = 'Avance accordée avec succès! Déductions commenceront le ' . date('d/m/Y', strtotime($deductionStartDate));
           if ($paymentMethod == 'cash') {
-            $transactionSuccess .= ' Montant déduit de la caisse.';
+            $transactionSuccess .= ' Montant déduit de la caisse du jour.';
           }
           echo "<script>setTimeout(function(){ window.location.href='employee-salary.php'; }, 2000);</script>";
           
@@ -578,13 +613,13 @@ if (isset($_POST['submit_advance_payment'])) {
       border-left: 4px solid #ffc107;
     }
 
-    /* NOUVEAUX STYLES POUR LA CAISSE */
+    /* STYLES POUR LA CAISSE DU JOUR */
     .cash-balance {
       border: 1px solid #ccc;
       padding: 15px;
       margin-bottom: 20px;
       border-radius: 4px;
-      background-color: #e6f3ff;
+      background-color: #fffacd;
     }
 
     .cash-balance.insufficient {
@@ -629,6 +664,25 @@ if (isset($_POST['submit_advance_payment'])) {
       font-weight: bold;
       font-size: 12px;
     }
+
+    .highlight-daily {
+      background-color: #fffacd; 
+      font-weight: bold;
+    }
+
+    .not-in-cash {
+      background-color: #f2f2f2;
+      font-style: italic;
+    }
+
+    .discount-info {
+      background-color: #fff3cd;
+      border: 1px solid #ffeaa7;
+      border-radius: 4px;
+      padding: 8px;
+      margin-top: 10px;
+      color: #856404;
+    }
   </style>
 </head>
 <body>
@@ -659,37 +713,45 @@ if (isset($_POST['submit_advance_payment'])) {
     </div>
     <?php endif; ?>
 
-    <!-- ========== AFFICHAGE DU SOLDE DE CAISSE (NOUVEAU) ========== -->
+    <!-- ========== AFFICHAGE DU SOLDE DE CAISSE DU JOUR (MÊME LOGIQUE QUE TRANSACTION.PHP) ========== -->
     <div class="row-fluid">
       <div class="span12">
-        <div class="cash-balance <?php echo ($totalCashBalance <= 0) ? 'insufficient' : ''; ?>">
+        <div class="cash-balance <?php echo ($todayBalance <= 0) ? 'insufficient' : ''; ?>">
           <div class="row-fluid">
             <div class="span6">
-              <h4>💰 Solde disponible en caisse:</h4>
-              <span class="cash-balance-amount" style="color: <?php echo ($totalCashBalance <= 0) ? '#d9534f' : '#468847'; ?>;">
-                <?php echo number_format($totalCashBalance, 2); ?>
+              <h4>💰 Solde en caisse (aujourd'hui uniquement):</h4>
+              <span class="cash-balance-amount highlight-daily" style="color: <?php echo ($todayBalance <= 0) ? '#d9534f' : '#468847'; ?>;">
+                <?php echo number_format($todayBalance, 2); ?>
               </span>
-              <?php if ($totalCashBalance <= 0): ?>
-                <p style="color: #d9534f;"><strong>⚠️ Attention:</strong> Solde insuffisant pour les paiements en espèces.</p>
+              <?php if ($todayBalance <= 0): ?>
+                <p style="color: #d9534f;"><strong>⚠️ Attention:</strong> Solde du jour insuffisant pour les paiements en espèces.</p>
               <?php endif; ?>
             </div>
             <div class="span6">
               <div style="font-size: 12px;">
-                <p><strong>💡 Information importante:</strong></p>
+                <p><strong>📊 Détail du jour (même calcul que page Transaction):</strong></p>
                 <ul style="margin: 0; padding-left: 20px;">
-                  <li><strong>Paiements en espèces:</strong> Vérifiés contre le solde de caisse</li>
-                  <li><strong>Virements bancaires:</strong> N'affectent pas la caisse physique</li>
-                  <li><strong>Avances en espèces:</strong> Déduites automatiquement de la caisse</li>
-                  <li><strong>Déductions:</strong> Remboursements ajoutés à la caisse</li>
+                  <li>Ventes régulières (avec remises): +<?php echo number_format($todayRegularSales, 2); ?></li>
+                  <li>Paiements clients en espèces: +<?php echo number_format($cashPayments, 2); ?></li>
+                  <li>Dépôts manuels: +<?php echo number_format($todayDeposits, 2); ?></li>
+                  <li>Retraits/Paiements: -<?php echo number_format($todayWithdrawals, 2); ?></li>
+                  <li>Retours: -<?php echo number_format($todayReturns, 2); ?></li>
                 </ul>
                 
-                <hr style="margin: 10px 0;">
-                <p><strong>📊 Flux du jour:</strong></p>
-                <ul style="margin: 0; padding-left: 20px;">
-                  <li>Ventes: +<?php echo number_format($todayRegularSales, 2); ?></li>
-                  <li>Dépôts: +<?php echo number_format($todayDeposits, 2); ?></li>
-                  <li>Retraits/Paiements: -<?php echo number_format($todayWithdrawals, 2); ?></li>
-                </ul>
+                <?php if ($todayCustomerPayments > $cashPayments): ?>
+                <p class="not-in-cash" style="margin-top: 10px;">
+                  <small><strong>Note:</strong> Paiements non-cash: <?php echo number_format($todayCustomerPayments - $cashPayments, 2); ?> (exclus du solde)</small>
+                </p>
+                <?php endif; ?>
+                
+                <?php if ($todayDiscountGiven > 0): ?>
+                <div class="discount-info" style="margin-top: 10px;">
+                  <small>
+                    <strong>💡 Remises accordées:</strong> <?php echo number_format($todayDiscountGiven, 2); ?><br>
+                    Avant remises: <?php echo number_format($todayRegularSalesBeforeDiscount, 2); ?>
+                  </small>
+                </div>
+                <?php endif; ?>
               </div>
             </div>
           </div>
@@ -698,7 +760,7 @@ if (isset($_POST['submit_advance_payment'])) {
     </div>
     
     <div class="alert-info">
-      <strong>Information:</strong> Cette page permet de gérer les employés, leurs salaires et les avances. 
+      <strong>Information:</strong> Cette page utilise le <strong>solde de caisse du jour uniquement</strong> (même logique que la page Transaction). 
       Le calcul du solde salarial se base sur les obligations mensuelles par rapport aux paiements effectués.
       <br><strong>Employés actifs:</strong> <?php echo $activeEmployees; ?> | 
       <strong>Obligations mensuelles:</strong> <?php echo number_format($monthlyObligations, 2); ?> | 
@@ -792,11 +854,11 @@ if (isset($_POST['submit_advance_payment'])) {
                 <?php endif; ?>
                 
                 <hr>
-                <h5>Actions rapides:</h5>
+                <h5>💰 Solde caisse du jour:</h5>
                 <p><small>
-                  • Utilisez l'onglet "Nouvelle transaction" pour enregistrer un paiement<br>
-                  • Utilisez l'onglet "Avances" pour gérer les avances sur salaire<br>
-                  • Les calculs se mettent à jour automatiquement
+                  <strong>Disponible:</strong> <?php echo number_format($todayBalance, 2); ?><br>
+                  <strong>Max retirable:</strong> <?php echo number_format(max(0, $todayBalance), 2); ?><br>
+                  <em>Note: Seuls les paiements en espèces impactent ce solde</em>
                 </small></p>
               </div>
             </div>
@@ -815,7 +877,7 @@ if (isset($_POST['submit_advance_payment'])) {
     </ul>
 
     <div class="tab-content">
-      <!-- Tab 1: New Transaction (MODIFIÉ) -->
+      <!-- Tab 1: New Transaction -->
       <div id="transactions" class="tab-pane active">
         <div class="widget-box">
           <div class="widget-title">
@@ -857,12 +919,12 @@ if (isset($_POST['submit_advance_payment'])) {
                 <div class="controls">
                   <input type="number" name="amount" id="amount_input" step="0.01" min="0.01" required />
                   <span class="help-inline balance-warning" id="amount_warning" style="display: none;">
-                    ⚠️ Montant supérieur au solde de caisse disponible !
+                    ⚠️ Montant supérieur au solde de caisse du jour disponible !
                   </span>
                 </div>
               </div>
 
-              <!-- MODIFICATION IMPORTANTE: Méthode de paiement avec vérification -->
+              <!-- Méthode de paiement avec vérification contre solde du jour -->
               <div class="control-group">
                 <label class="control-label">Méthode de paiement :</label>
                 <div class="controls">
@@ -872,7 +934,7 @@ if (isset($_POST['submit_advance_payment'])) {
                   </label>
                   <label class="radio inline">
                     <input type="radio" name="payment_method" value="cash" id="cash_payment"> 
-                    Espèces <small>(vérifié contre caisse)</small>
+                    Espèces <small>(vérifié contre caisse du jour)</small>
                   </label>
                   <label class="radio inline">
                     <input type="radio" name="payment_method" value="check" id="check_payment"> 
@@ -886,8 +948,8 @@ if (isset($_POST['submit_advance_payment'])) {
                   <div class="payment-method-info cash-warning" id="cash_warning" style="display: none;">
                     <small>
                       <strong>💰 Paiement en espèces:</strong> 
-                      <span id="cash_balance_info">Solde de caisse: <?php echo number_format($totalCashBalance, 2); ?></span>
-                      <br><strong>⚠️ Important:</strong> Ce montant sera automatiquement déduit de la caisse physique.
+                      <span id="cash_balance_info">Solde de caisse du jour: <?php echo number_format($todayBalance, 2); ?></span>
+                      <br><strong>⚠️ Important:</strong> Ce montant sera automatiquement déduit de la caisse physique du jour.
                     </small>
                   </div>
                 </div>
@@ -912,7 +974,7 @@ if (isset($_POST['submit_advance_payment'])) {
                   Enregistrer la transaction
                 </button>
                 <span class="help-inline balance-warning" id="submit_warning" style="display: none;">
-                  Impossible d'effectuer ce paiement en espèces: solde de caisse insuffisant
+                  Impossible d'effectuer ce paiement en espèces: solde de caisse du jour insuffisant
                 </span>
               </div>
             </form>
@@ -1068,7 +1130,7 @@ if (isset($_POST['submit_advance_payment'])) {
                     </div>
                   </div>
 
-                  <!-- NOUVEAU: Méthode de paiement pour avances -->
+                  <!-- Méthode de paiement pour avances -->
                   <div class="control-group">
                     <label class="control-label">Méthode de paiement avance :</label>
                     <div class="controls">
@@ -1078,14 +1140,14 @@ if (isset($_POST['submit_advance_payment'])) {
                       </label>
                       <label class="radio inline">
                         <input type="radio" name="advance_payment_method" value="cash" id="advance_cash"> 
-                        Espèces <small>(déduit de la caisse)</small>
+                        Espèces <small>(déduit de la caisse du jour)</small>
                       </label>
                       
                       <div class="payment-method-info cash-warning" id="advance_cash_warning" style="display: none;">
                         <small>
                           <strong>💰 Avance en espèces:</strong> 
-                          Solde de caisse: <?php echo number_format($totalCashBalance, 2); ?>
-                          <br><strong>⚠️ Important:</strong> Cette avance sera automatiquement déduite de la caisse physique.
+                          Solde de caisse du jour: <?php echo number_format($todayBalance, 2); ?>
+                          <br><strong>⚠️ Important:</strong> Cette avance sera automatiquement déduite de la caisse physique du jour.
                         </small>
                       </div>
                     </div>
@@ -1441,9 +1503,9 @@ if (isset($_POST['submit_advance_payment'])) {
 
 <script>
 $(document).ready(function() {
-  var totalCashBalance = <?php echo $totalCashBalance; ?>;
+  var todayBalance = <?php echo $todayBalance; ?>;
   
-  // Fonction pour vérifier le solde de caisse
+  // Fonction pour vérifier le solde de caisse du jour
   function checkCashBalance() {
     var amount = parseFloat($('#amount_input').val()) || 0;
     var paymentMethod = $('input[name="payment_method"]:checked').val();
@@ -1451,7 +1513,7 @@ $(document).ready(function() {
     
     // Vérifier seulement pour les paiements en espèces
     if (paymentMethod === 'cash' && (transactionType === 'payment' || transactionType === 'bonus')) {
-      if (amount > totalCashBalance) {
+      if (amount > todayBalance) {
         $('#amount_warning').show();
         $('#submit_warning').show();
         $('#submit_btn').prop('disabled', true);
@@ -1469,6 +1531,7 @@ $(document).ready(function() {
   $('input[name="payment_method"]').on('change', function() {
     if ($(this).val() === 'cash') {
       $('#cash_warning').show();
+      $('#cash_balance_info').text('Solde de caisse du jour: ' + todayBalance.toFixed(2));
     } else {
       $('#cash_warning').hide();
     }
@@ -1493,14 +1556,14 @@ $(document).ready(function() {
   $('#salary-transaction-form').on('submit', function(e) {
     if (!checkCashBalance()) {
       e.preventDefault();
-      alert('Impossible d\'effectuer ce paiement en espèces: solde de caisse insuffisant.');
+      alert('Impossible d\'effectuer ce paiement en espèces: solde de caisse du jour insuffisant.');
       return false;
     }
     
     var paymentMethod = $('input[name="payment_method"]:checked').val();
     if (paymentMethod === 'cash') {
       var amount = parseFloat($('#amount_input').val()) || 0;
-      if (!confirm('Confirmer le paiement en espèces de ' + amount.toFixed(2) + ' ?\n\nCe montant sera déduit de la caisse physique.')) {
+      if (!confirm('Confirmer le paiement en espèces de ' + amount.toFixed(2) + ' ?\n\nCe montant sera déduit de la caisse physique du jour.')) {
         e.preventDefault();
         return false;
       }
