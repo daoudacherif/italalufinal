@@ -144,7 +144,7 @@ $statusFilter = $_GET['status'] ?? 'all';
 $dateFilter = $_GET['date_filter'] ?? 'all';
 $searchTerm = $_GET['search'] ?? '';
 
-// Construction de la requête WHERE
+// Construction de la requête WHERE - LOGIQUE IDENTIQUE AU TABLEAU HISTORIQUE
 $whereConditions = ["tcc.IsCheckOut = 1"];
 
 if ($statusFilter !== 'all') {
@@ -152,11 +152,20 @@ if ($statusFilter !== 'all') {
         case 'echu':
             $whereConditions[] = "tcc.DateEcheance < CURDATE() AND tc.Dues > 0";
             break;
+        case 'aujourd_hui':
+            $whereConditions[] = "tcc.DateEcheance = CURDATE() AND tc.Dues > 0";
+            break;
         case 'bientot_echu':
-            $whereConditions[] = "tcc.DateEcheance BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY) AND tc.Dues > 0";
+            $whereConditions[] = "tcc.DateEcheance BETWEEN DATE_ADD(CURDATE(), INTERVAL 1 DAY) AND DATE_ADD(CURDATE(), INTERVAL 7 DAY) AND tc.Dues > 0";
+            break;
+        case 'en_cours':
+            $whereConditions[] = "tcc.DateEcheance > DATE_ADD(CURDATE(), INTERVAL 7 DAY) AND tc.Dues > 0";
             break;
         case 'regle':
             $whereConditions[] = "tc.Dues <= 0";
+            break;
+        case 'sans_echeance':
+            $whereConditions[] = "tcc.DateEcheance IS NULL AND tc.Dues > 0";
             break;
     }
 }
@@ -190,7 +199,7 @@ $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
 $recordsPerPage = 20;
 $offset = ($page - 1) * $recordsPerPage;
 
-// Requête principale avec informations complètes
+// Requête principale avec LOGIQUE IDENTIQUE AU TABLEAU HISTORIQUE
 $mainQuery = "
     SELECT 
         tc.ID,
@@ -208,9 +217,11 @@ $mainQuery = "
         tcm.CustomerEmail,
         tcm.CustomerAddress,
         DATEDIFF(CURDATE(), tcc.DateEcheance) as JoursRetard,
+        -- CALCUL IDENTIQUE AU SYSTÈME D'ORIGINE
         CASE 
             WHEN tc.Dues <= 0 THEN 'Réglé'
-            WHEN tcc.DateEcheance < CURDATE() THEN 'En retard'
+            WHEN tcc.DateEcheance IS NULL THEN 'Sans échéance'
+            WHEN tcc.DateEcheance < CURDATE() THEN 'Échu'
             WHEN tcc.DateEcheance = CURDATE() THEN 'Échéance aujourd\'hui'
             WHEN DATEDIFF(tcc.DateEcheance, CURDATE()) <= 7 THEN 'Bientôt échu'
             ELSE 'En cours'
@@ -219,6 +230,7 @@ $mainQuery = "
     LEFT JOIN tblcreditcart tcc ON tcc.BillingId = tc.BillingNumber
     LEFT JOIN tblcustomer_master tcm ON tcm.id = tc.customer_master_id
     $whereClause
+    -- TRI IDENTIQUE AU SYSTÈME D'ORIGINE
     ORDER BY 
         CASE 
             WHEN tc.Dues > 0 AND tcc.DateEcheance < CURDATE() THEN 1
@@ -244,12 +256,14 @@ $countResult = mysqli_query($con, $countQuery);
 $totalRecords = mysqli_fetch_assoc($countResult)['total'];
 $totalPages = ceil($totalRecords / $recordsPerPage);
 
-// Statistiques générales
+// Statistiques générales avec MÊME LOGIQUE
 $statsQuery = "
     SELECT 
         COUNT(DISTINCT CASE WHEN tc.Dues > 0 AND tcc.DateEcheance < CURDATE() THEN tc.BillingNumber END) as factures_echues,
         COUNT(DISTINCT CASE WHEN tc.Dues > 0 AND tcc.DateEcheance = CURDATE() THEN tc.BillingNumber END) as factures_aujourd_hui,
         COUNT(DISTINCT CASE WHEN tc.Dues > 0 AND DATEDIFF(tcc.DateEcheance, CURDATE()) BETWEEN 1 AND 7 THEN tc.BillingNumber END) as factures_bientot,
+        COUNT(DISTINCT CASE WHEN tc.Dues > 0 AND tcc.DateEcheance IS NULL THEN tc.BillingNumber END) as factures_sans_echeance,
+        COUNT(DISTINCT CASE WHEN tc.Dues <= 0 THEN tc.BillingNumber END) as factures_reglees,
         SUM(CASE WHEN tc.Dues > 0 AND tcc.DateEcheance < CURDATE() THEN tc.Dues ELSE 0 END) as montant_echu,
         SUM(CASE WHEN tc.Dues > 0 THEN tc.Dues ELSE 0 END) as total_creances
     FROM tblcustomer tc
@@ -267,6 +281,7 @@ $stats = mysqli_fetch_assoc($statsResult);
     <?php include_once('includes/cs.php'); ?>
     <?php include_once('includes/responsive.php'); ?>
     <style>
+        /* ========== STYLES IDENTIQUES AU SYSTÈME D'ORIGINE ========== */
         .stats-dashboard {
             display: flex;
             gap: 15px;
@@ -276,38 +291,29 @@ $stats = mysqli_fetch_assoc($statsResult);
         
         .stat-card {
             flex: 1;
-            min-width: 200px;
+            min-width: 180px;
             background: #fff;
             border-radius: 8px;
             padding: 15px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             border-left: 4px solid;
+            text-align: center;
         }
         
-        .stat-card.danger {
-            border-left-color: #dc3545;
-        }
-        
-        .stat-card.warning {
-            border-left-color: #ffc107;
-        }
-        
-        .stat-card.info {
-            border-left-color: #17a2b8;
-        }
-        
-        .stat-card.success {
-            border-left-color: #28a745;
-        }
+        .stat-card.danger { border-left-color: #dc3545; }
+        .stat-card.warning { border-left-color: #ffc107; }
+        .stat-card.info { border-left-color: #17a2b8; }
+        .stat-card.success { border-left-color: #28a745; }
+        .stat-card.secondary { border-left-color: #6c757d; }
         
         .stat-value {
-            font-size: 24px;
+            font-size: 20px;
             font-weight: bold;
             margin-bottom: 5px;
         }
         
         .stat-label {
-            font-size: 12px;
+            font-size: 11px;
             color: #666;
             text-transform: uppercase;
         }
@@ -319,37 +325,52 @@ $stats = mysqli_fetch_assoc($statsResult);
             margin-bottom: 20px;
         }
         
+        /* BADGES DE STATUT - IDENTIQUES AU SYSTÈME D'ORIGINE */
         .status-badge {
             padding: 3px 8px;
             border-radius: 12px;
-            font-size: 11px;
+            font-size: 10px;
             font-weight: bold;
             text-transform: uppercase;
         }
         
-        .status-echu {
-            background-color: #dc3545;
-            color: white;
+        .status-regle { background: #28a745; color: white; }
+        .status-echu { background: #dc3545; color: white; }
+        .status-aujourd-hui { background: #ffc107; color: #212529; }
+        .status-bientot { background: #17a2b8; color: white; }
+        .status-en-cours { background: #6c757d; color: white; }
+        .status-sans { background: #e9ecef; color: #495057; }
+        
+        /* CLASSES DE LIGNES - IDENTIQUES AU SYSTÈME D'ORIGINE */
+        .facture-echue {
+            background-color: #fff5f5 !important;
+            border-left: 3px solid #dc3545;
         }
         
-        .status-aujourd-hui {
-            background-color: #ffc107;
-            color: #212529;
+        .facture-attention {
+            background-color: #fffbf0 !important;
+            border-left: 3px solid #ffc107;
         }
         
-        .status-bientot {
-            background-color: #17a2b8;
-            color: white;
+        .montant-du {
+            color: #dc3545;
+            font-weight: bold;
         }
         
-        .status-en-cours {
-            background-color: #28a745;
-            color: white;
+        .montant-ok {
+            color: #28a745;
+            font-weight: bold;
         }
         
-        .status-regle {
-            background-color: #6c757d;
-            color: white;
+        .retard-info {
+            color: #dc3545;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        
+        .echeance-info {
+            font-size: 12px;
+            color: #666;
         }
         
         .action-buttons {
@@ -361,16 +382,6 @@ $stats = mysqli_fetch_assoc($statsResult);
         .btn-mini {
             padding: 2px 6px;
             font-size: 11px;
-        }
-        
-        .montant-echu {
-            color: #dc3545;
-            font-weight: bold;
-        }
-        
-        .montant-normal {
-            color: #28a745;
-            font-weight: bold;
         }
         
         .modal {
@@ -430,12 +441,6 @@ $stats = mysqli_fetch_assoc($statsResult);
             background-color: #ddd;
         }
         
-        .retard-days {
-            color: #dc3545;
-            font-weight: bold;
-            font-size: 11px;
-        }
-        
         @media (max-width: 768px) {
             .stats-dashboard {
                 flex-direction: column;
@@ -468,7 +473,7 @@ $stats = mysqli_fetch_assoc($statsResult);
         </div>
         
         <div class="container-fluid">
-            <!-- Tableau de bord des statistiques -->
+            <!-- Tableau de bord des statistiques - AMÉLIORÉ -->
             <div class="stats-dashboard">
                 <div class="stat-card danger">
                     <div class="stat-value"><?php echo $stats['factures_echues']; ?></div>
@@ -482,17 +487,21 @@ $stats = mysqli_fetch_assoc($statsResult);
                     <div class="stat-value"><?php echo $stats['factures_bientot']; ?></div>
                     <div class="stat-label">Bientôt Échues (7j)</div>
                 </div>
+                <div class="stat-card secondary">
+                    <div class="stat-value"><?php echo $stats['factures_sans_echeance']; ?></div>
+                    <div class="stat-label">Sans Échéance</div>
+                </div>
                 <div class="stat-card success">
+                    <div class="stat-value"><?php echo $stats['factures_reglees']; ?></div>
+                    <div class="stat-label">Factures Réglées</div>
+                </div>
+                <div class="stat-card danger">
                     <div class="stat-value"><?php echo number_format($stats['montant_echu']); ?> GNF</div>
                     <div class="stat-label">Montant Échu</div>
                 </div>
-                <div class="stat-card info">
-                    <div class="stat-value"><?php echo number_format($stats['total_creances']); ?> GNF</div>
-                    <div class="stat-label">Total Créances</div>
-                </div>
             </div>
 
-            <!-- Section de filtres -->
+            <!-- Section de filtres - AMÉLIORÉE -->
             <div class="filters-section">
                 <form method="get" class="form-inline">
                     <div class="row-fluid">
@@ -501,7 +510,10 @@ $stats = mysqli_fetch_assoc($statsResult);
                             <select name="status" class="span12">
                                 <option value="all" <?php echo $statusFilter == 'all' ? 'selected' : ''; ?>>Tous</option>
                                 <option value="echu" <?php echo $statusFilter == 'echu' ? 'selected' : ''; ?>>Échues</option>
+                                <option value="aujourd_hui" <?php echo $statusFilter == 'aujourd_hui' ? 'selected' : ''; ?>>Échéance Aujourd'hui</option>
                                 <option value="bientot_echu" <?php echo $statusFilter == 'bientot_echu' ? 'selected' : ''; ?>>Bientôt Échues</option>
+                                <option value="en_cours" <?php echo $statusFilter == 'en_cours' ? 'selected' : ''; ?>>En Cours</option>
+                                <option value="sans_echeance" <?php echo $statusFilter == 'sans_echeance' ? 'selected' : ''; ?>>Sans Échéance</option>
                                 <option value="regle" <?php echo $statusFilter == 'regle' ? 'selected' : ''; ?>>Réglées</option>
                             </select>
                         </div>
@@ -546,7 +558,7 @@ $stats = mysqli_fetch_assoc($statsResult);
             </div>
             <hr>
 
-            <!-- Tableau des factures -->
+            <!-- Tableau des factures - LOGIQUE IDENTIQUE -->
             <div class="widget-box">
                 <div class="widget-title">
                     <span class="icon"><i class="icon-time"></i></span>
@@ -561,9 +573,9 @@ $stats = mysqli_fetch_assoc($statsResult);
                                 <th>Téléphone</th>
                                 <th>Date Facture</th>
                                 <th>Échéance</th>
-                                <th>Montant</th>
+                                <th>Montant Final</th>
                                 <th>Payé</th>
-                                <th>Dû</th>
+                                <th>Reste</th>
                                 <th>Statut</th>
                                 <th>Actions</th>
                             </tr>
@@ -572,33 +584,38 @@ $stats = mysqli_fetch_assoc($statsResult);
                             <?php 
                             if (mysqli_num_rows($result) > 0) {
                                 while ($facture = mysqli_fetch_assoc($result)) {
-                                    $statusClass = '';
-                                    $statusText = $facture['StatutFacture'];
-                                    
-                                    switch ($facture['StatutFacture']) {
-                                        case 'En retard':
-                                            $statusClass = 'status-echu';
-                                            break;
-                                        case 'Échéance aujourd\'hui':
-                                            $statusClass = 'status-aujourd-hui';
-                                            break;
-                                        case 'Bientôt échu':
-                                            $statusClass = 'status-bientot';
-                                            break;
-                                        case 'En cours':
-                                            $statusClass = 'status-en-cours';
-                                            break;
-                                        case 'Réglé':
-                                            $statusClass = 'status-regle';
-                                            break;
+                                    $finalAmt = floatval($facture['FinalAmount']);
+                                    $paidAmt = floatval($facture['Paid']);
+                                    $dueAmt = floatval($facture['Dues']);
+                                    $dateEcheance = $facture['DateEcheance'];
+                                    $statutFacture = $facture['StatutFacture'];
+                                    $joursRetard = $facture['JoursRetard'];
+
+                                    // LOGIQUE IDENTIQUE : Déterminer la classe CSS de la ligne
+                                    $rowClass = '';
+                                    if ($statutFacture === 'Échu') {
+                                        $rowClass = 'facture-echue';
+                                    } elseif ($statutFacture === 'Échéance aujourd\'hui' || $statutFacture === 'Bientôt échu') {
+                                        $rowClass = 'facture-attention';
                                     }
-                                    
-                                    $montantClass = $facture['Dues'] > 0 ? 'montant-echu' : 'montant-normal';
-                                    $dateEcheance = $facture['DateEcheance'] ? date('d/m/Y', strtotime($facture['DateEcheance'])) : 'Non définie';
+
+                                    // LOGIQUE IDENTIQUE : Badge de statut
+                                    $statusClass = '';
+                                    switch ($statutFacture) {
+                                        case 'Réglé': $statusClass = 'status-regle'; break;
+                                        case 'Échu': $statusClass = 'status-echu'; break;
+                                        case 'Échéance aujourd\'hui': $statusClass = 'status-aujourd-hui'; break;
+                                        case 'Bientôt échu': $statusClass = 'status-bientot'; break;
+                                        case 'En cours': $statusClass = 'status-en-cours'; break;
+                                        default: $statusClass = 'status-sans'; break;
+                                    }
+
+                                    $montantClass = $dueAmt > 0 ? 'montant-du' : 'montant-ok';
                                     ?>
-                                    <tr>
+                                    <tr class="<?php echo $rowClass; ?>">
                                         <td>
                                             <strong><?php echo $facture['BillingNumber']; ?></strong>
+                                            <br><small class="text-muted"><?php echo ucfirst($facture['ModeOfPayment']); ?></small>
                                         </td>
                                         <td>
                                             <?php echo htmlspecialchars($facture['CustomerName']); ?>
@@ -609,32 +626,38 @@ $stats = mysqli_fetch_assoc($statsResult);
                                             </a>
                                         </td>
                                         <td>
-                                            <?php echo date('d/m/Y', strtotime($facture['BillingDate'])); ?>
+                                            <?php echo date('d/m/Y H:i', strtotime($facture['BillingDate'])); ?>
                                         </td>
                                         <td>
-                                            <?php echo $dateEcheance; ?>
-                                            <?php if ($facture['JoursRetard'] > 0): ?>
-                                                <br><span class="retard-days">+<?php echo $facture['JoursRetard']; ?> jours</span>
+                                            <?php if ($dateEcheance): ?>
+                                                <?php echo date('d/m/Y', strtotime($dateEcheance)); ?>
+                                                <?php if ($joursRetard > 0): ?>
+                                                    <br><span class="retard-info">+<?php echo $joursRetard; ?> jour(s) de retard</span>
+                                                <?php elseif ($joursRetard <= 0 && $dueAmt > 0): ?>
+                                                    <?php 
+                                                    $joursRestants = abs($joursRetard);
+                                                    if ($joursRestants <= 7): ?>
+                                                        <br><span class="echeance-info">Dans <?php echo $joursRestants; ?> jour(s)</span>
+                                                    <?php endif; ?>
+                                                <?php endif; ?>
+                                            <?php else: ?>
+                                                <span class="text-muted">Non définie</span>
                                             <?php endif; ?>
                                         </td>
-                                        <td>
-                                            <?php echo number_format($facture['FinalAmount']); ?> GNF
-                                        </td>
-                                        <td>
-                                            <?php echo number_format($facture['Paid']); ?> GNF
-                                        </td>
+                                        <td><?php echo number_format($finalAmt, 0); ?> GNF</td>
+                                        <td><?php echo number_format($paidAmt, 0); ?> GNF</td>
                                         <td class="<?php echo $montantClass; ?>">
-                                            <?php echo number_format($facture['Dues']); ?> GNF
+                                            <?php echo number_format($dueAmt, 0); ?> GNF
                                         </td>
                                         <td>
                                             <span class="status-badge <?php echo $statusClass; ?>">
-                                                <?php echo $statusText; ?>
+                                                <?php echo $statutFacture; ?>
                                             </span>
                                         </td>
                                         <td>
                                             <div class="action-buttons">
-                                                <?php if ($facture['Dues'] > 0): ?>
-                                                <button onclick="openPaymentModal('<?php echo $facture['BillingNumber']; ?>', <?php echo $facture['Dues']; ?>)" 
+                                                <?php if ($dueAmt > 0): ?>
+                                                <button onclick="openPaymentModal('<?php echo $facture['BillingNumber']; ?>', <?php echo $dueAmt; ?>)" 
                                                         class="btn btn-success btn-mini" title="Enregistrer paiement">
                                                     <i class="icon-money"></i>
                                                 </button>
@@ -646,6 +669,10 @@ $stats = mysqli_fetch_assoc($statsResult);
                                                 <a href="invoice_details.php?billingnum=<?php echo $facture['BillingNumber']; ?>" 
                                                    class="btn btn-info btn-mini" title="Voir détails">
                                                     <i class="icon-eye-open"></i>
+                                                </a>
+                                                <a href="client-details.php?name=<?php echo urlencode($facture['CustomerName']); ?>&mobile=<?php echo $facture['MobileNumber']; ?>" 
+                                                   class="btn btn-primary btn-mini" title="Voir compte client">
+                                                    <i class="icon-user"></i>
                                                 </a>
                                             </div>
                                         </td>
