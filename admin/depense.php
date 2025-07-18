@@ -319,7 +319,7 @@ $monthlyData = array_reverse($monthlyData); // Pour afficher du plus ancien au p
                 <div class="span4">
                   <div class="stat-card">
                     <div class="stat-number text-info">
-                      <?php echo $totalTransactions > 0 ? number_format($totalExpenses / $totalTransactions, 2) : '0.00'; ?>
+                      <?php echo $totalTransactions > 0 ? number_format($totalExpenses / $totalTransactions) : '0.00'; ?>
                     </div>
                     <div>Dépense moyenne</div>
                   </div>
@@ -327,7 +327,7 @@ $monthlyData = array_reverse($monthlyData); // Pour afficher du plus ancien au p
                 <div class="span4">
                   <div class="stat-card">
                     <div class="stat-number text-warning">
-                      <?php echo $previousPeriodTotal > 0 ? number_format($previousPeriodTotal, 2) : 'N/A'; ?>
+                      <?php echo $previousPeriodTotal > 0 ? number_format($previousPeriodTotal) : 'N/A'; ?>
                     </div>
                     <div>Période précédente</div>
                   </div>
