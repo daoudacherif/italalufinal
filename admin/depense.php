@@ -305,7 +305,7 @@ $monthlyData = array_reverse($monthlyData); // Pour afficher du plus ancien au p
             <div class="span8">
               <h3>💸 Total des dépenses (<?php echo $periodTitle; ?>): 
                 <span class="text-error highlight-total">
-                  <?php echo number_format($totalExpenses, 2); ?> €
+                  <?php echo number_format($totalExpenses, 2); ?> FG
                 </span>
               </h3>
               
