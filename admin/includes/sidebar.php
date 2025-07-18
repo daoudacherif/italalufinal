@@ -108,6 +108,7 @@ try {
         <li><a href="customer-details.php">Détails client</a></li>
         <li><a href="manage_customers.php">Gestion des clients</a></li>
         <li><a href="recouvrement.php">Recouvrement</a></li>
+        <li><a href="employer.php">Employés</a></li>
       </ul>
     </li>
 
