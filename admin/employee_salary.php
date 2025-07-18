@@ -9,15 +9,88 @@ if (strlen($_SESSION['imsaid'] == 0)) {
   exit;
 }
 
+// =================================
+// 1) CALCULER LE SOLDE DE CAISSE ACTUEL
+// =================================
+
+// 1.1 Toutes les ventes (depuis le début)
+$sqlAllSales = "
+  SELECT COALESCE(SUM(c.ProductQty * p.Price), 0) AS totalSales
+  FROM tblcart c
+  JOIN tblproducts p ON p.ID = c.ProductId
+  WHERE c.IsCheckOut = '1'
+";
+$resAllSales = mysqli_query($con, $sqlAllSales);
+$rowAllSales = mysqli_fetch_assoc($resAllSales);
+$totalSales = floatval($rowAllSales['totalSales']);
+
+// 1.2 Tous les paiements clients en espèces (depuis le début)
+$sqlAllCashPayments = "
+  SELECT COALESCE(SUM(PaymentAmount), 0) AS totalPaid
+  FROM tblpayments
+  WHERE PaymentMethod = 'Cash'
+";
+$resAllCashPayments = mysqli_query($con, $sqlAllCashPayments);
+$rowAllCashPayments = mysqli_fetch_assoc($resAllCashPayments);
+$totalCashPayments = floatval($rowAllCashPayments['totalPaid']);
+
+// 1.3 Toutes les transactions manuelles de caisse (depuis le début)
+$sqlAllTransactions = "
+  SELECT
+    COALESCE(SUM(CASE WHEN TransType='IN' THEN Amount ELSE 0 END), 0) AS allDeposits,
+    COALESCE(SUM(CASE WHEN TransType='OUT' THEN Amount ELSE 0 END), 0) AS allWithdrawals
+  FROM tblcashtransactions
+";
+$resAllTransactions = mysqli_query($con, $sqlAllTransactions);
+$rowAllTransactions = mysqli_fetch_assoc($resAllTransactions);
+$allDeposits = floatval($rowAllTransactions['allDeposits']);
+$allWithdrawals = floatval($rowAllTransactions['allWithdrawals']);
+
+// 1.4 Tous les retours (depuis le début)
+$sqlAllReturns = "
+  SELECT COALESCE(SUM(r.Quantity * p.Price), 0) AS totalReturns
+  FROM tblreturns r
+  JOIN tblproducts p ON p.ID = r.ProductID
+";
+$resAllReturns = mysqli_query($con, $sqlAllReturns);
+$rowAllReturns = mysqli_fetch_assoc($resAllReturns);
+$totalReturns = floatval($rowAllReturns['totalReturns']);
+
+// 1.5 SOLDE TOTAL DE CAISSE (cumulatif)
+$totalCashBalance = $allDeposits + $totalSales + $totalCashPayments - ($allWithdrawals + $totalReturns);
+
+// 1.6 Calculs du jour pour affichage
+$sqlTodaySales = "
+  SELECT COALESCE(SUM(c.ProductQty * p.Price), 0) AS todaySales
+  FROM tblcart c
+  JOIN tblproducts p ON p.ID = c.ProductId
+  WHERE c.IsCheckOut = '1' AND DATE(c.CartDate) = CURDATE()
+";
+$resTodaySales = mysqli_query($con, $sqlTodaySales);
+$rowTodaySales = mysqli_fetch_assoc($resTodaySales);
+$todayRegularSales = floatval($rowTodaySales['todaySales']);
+
+$sqlTodayDeposits = "
+  SELECT
+    COALESCE(SUM(CASE WHEN TransType='IN' THEN Amount ELSE 0 END), 0) AS deposits,
+    COALESCE(SUM(CASE WHEN TransType='OUT' THEN Amount ELSE 0 END), 0) AS withdrawals
+  FROM tblcashtransactions
+  WHERE DATE(TransDate) = CURDATE()
+";
+$resTodayDeposits = mysqli_query($con, $sqlTodayDeposits);
+$rowTodayDeposits = mysqli_fetch_assoc($resTodayDeposits);
+$todayDeposits = floatval($rowTodayDeposits['deposits']);
+$todayWithdrawals = floatval($rowTodayDeposits['withdrawals']);
+
 // ---------------------------------------------------------------------
-// 1) CALCULATE CURRENT MONTH SALARY OBLIGATIONS AND PAYMENTS
+// 2) CALCULATE CURRENT MONTH SALARY OBLIGATIONS AND PAYMENTS
 // ---------------------------------------------------------------------
 
 // Current month and year
 $currentMonth = date('Y-m');
 $currentMonthName = date('F Y');
 
-// 1.1 Total salary obligations for current month (all active employees)
+// 2.1 Total salary obligations for current month (all active employees)
 $sqlSalaryObligations = "
   SELECT COALESCE(SUM(e.BaseSalary), 0) AS totalObligations,
          COUNT(*) AS activeEmployees
@@ -29,7 +102,7 @@ $rowSalaryObligations = mysqli_fetch_assoc($resSalaryObligations);
 $monthlyObligations = floatval($rowSalaryObligations['totalObligations']);
 $activeEmployees = intval($rowSalaryObligations['activeEmployees']);
 
-// 1.2 Total payments made this month
+// 2.2 Total payments made this month
 $sqlPaymentsMade = "
   SELECT 
     COALESCE(SUM(CASE WHEN TransactionType='payment' THEN Amount ELSE 0 END), 0) AS salaryPayments,
@@ -47,10 +120,10 @@ $bonusPaymentsMade = floatval($rowPaymentsMade['bonusPayments']);
 $deductionsMade = floatval($rowPaymentsMade['deductions']);
 $adjustmentsMade = floatval($rowPaymentsMade['adjustments']);
 
-// 1.3 Outstanding salary balance
+// 2.3 Outstanding salary balance
 $outstandingSalaries = $monthlyObligations - $salaryPaymentsMade;
 
-// 1.4 AVANCES SUR SALAIRE - Calculs
+// 2.4 AVANCES SUR SALAIRE - Calculs
 $sqlActiveAdvances = "
   SELECT 
     COUNT(*) AS totalAdvances,
@@ -65,7 +138,7 @@ $totalActiveAdvances = intval($rowActiveAdvances['totalAdvances']);
 $totalAdvanceAmount = floatval($rowActiveAdvances['totalAmount']);
 $totalRemainingBalance = floatval($rowActiveAdvances['totalRemaining']);
 
-// 1.5 Get employees who haven't been paid this month
+// 2.5 Get employees who haven't been paid this month
 $sqlUnpaidEmployees = "
   SELECT e.ID, e.FullName, e.BaseSalary, e.Position
   FROM tblemployees e
@@ -81,7 +154,7 @@ $sqlUnpaidEmployees = "
 $resUnpaidEmployees = mysqli_query($con, $sqlUnpaidEmployees);
 
 // ---------------------------------------------------------------------
-// 2) HANDLE NEW SALARY TRANSACTION
+// 3) HANDLE NEW SALARY TRANSACTION (MODIFIÉ POUR LA CAISSE)
 // ---------------------------------------------------------------------
 
 $transactionError = '';
@@ -100,24 +173,93 @@ if (isset($_POST['submit_transaction'])) {
     $transactionError = 'Veuillez sélectionner un employé valide';
   } elseif ($amount <= 0) {
     $transactionError = 'Le montant doit être supérieur à 0';
-  } else {
-    // Insert the transaction
-    $sqlInsertTransaction = "
-      INSERT INTO tblsalarytransactions (EmployeeID, TransactionType, Amount, PaymentMethod, PayrollPeriod, Description, ProcessedBy)
-      VALUES ('$employeeId', '$transactionType', '$amount', '$paymentMethod', '$payrollPeriod', '$description', '$processedBy')
-    ";
+  } 
+  // NOUVEAU: Vérifier le solde de caisse pour les paiements en espèces
+  elseif ($paymentMethod == 'cash' && in_array($transactionType, ['payment', 'bonus']) && $amount > $totalCashBalance) {
+    $transactionError = 'Solde en caisse insuffisant pour effectuer ce paiement en espèces ! Solde disponible: ' . number_format($totalCashBalance, 2);
+  } 
+  else {
+    // NOUVEAU: Utiliser une transaction pour assurer la cohérence
+    mysqli_begin_transaction($con);
     
-    if (mysqli_query($con, $sqlInsertTransaction)) {
+    try {
+      // 1) Insérer la transaction salariale
+      $sqlInsertTransaction = "
+        INSERT INTO tblsalarytransactions (EmployeeID, TransactionType, Amount, PaymentMethod, PayrollPeriod, Description, ProcessedBy)
+        VALUES ('$employeeId', '$transactionType', '$amount', '$paymentMethod', '$payrollPeriod', '$description', '$processedBy')
+      ";
+      
+      if (!mysqli_query($con, $sqlInsertTransaction)) {
+        throw new Exception('Erreur lors de l\'enregistrement de la transaction salariale');
+      }
+      
+      // 2) NOUVEAU: Si c'est un paiement en espèces, enregistrer dans la caisse
+      if ($paymentMethod == 'cash') {
+        // Récupérer le nom de l'employé pour le commentaire
+        $sqlEmployee = "SELECT FullName, Position FROM tblemployees WHERE ID = '$employeeId' LIMIT 1";
+        $resEmployee = mysqli_query($con, $sqlEmployee);
+        $rowEmployee = mysqli_fetch_assoc($resEmployee);
+        $employeeName = isset($rowEmployee['FullName']) ? $rowEmployee['FullName'] : 'Employé #'.$employeeId;
+        $employeePosition = isset($rowEmployee['Position']) ? $rowEmployee['Position'] : '';
+        
+        // Déterminer le type de transaction de caisse
+        if (in_array($transactionType, ['payment', 'bonus'])) {
+          // C'est une sortie de caisse
+          $newCashBalance = $totalCashBalance - $amount;
+          $cashComment = ucfirst($transactionType) . " en espèces: " . $employeeName;
+          if (!empty($employeePosition)) {
+            $cashComment .= " (" . $employeePosition . ")";
+          }
+          if (!empty($description)) {
+            $cashComment .= " - " . $description;
+          }
+          
+          $sqlCashTrans = "
+            INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
+            VALUES(CURDATE(), 'OUT', '$amount', '$newCashBalance', '$cashComment')
+          ";
+        } else {
+          // Déduction ou ajustement = entrée en caisse (remboursement)
+          $newCashBalance = $totalCashBalance + $amount;
+          $cashComment = ucfirst($transactionType) . " en espèces: " . $employeeName;
+          if (!empty($employeePosition)) {
+            $cashComment .= " (" . $employeePosition . ")";
+          }
+          if (!empty($description)) {
+            $cashComment .= " - " . $description;
+          }
+          
+          $sqlCashTrans = "
+            INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
+            VALUES(CURDATE(), 'IN', '$amount', '$newCashBalance', '$cashComment')
+          ";
+        }
+        
+        if (!mysqli_query($con, $sqlCashTrans)) {
+          throw new Exception("Erreur lors de l'enregistrement de la transaction en caisse");
+        }
+        
+        // Mettre à jour le solde de caisse
+        $totalCashBalance = $newCashBalance;
+      }
+      
+      // 3) Valider la transaction
+      mysqli_commit($con);
       $transactionSuccess = 'Transaction enregistrée avec succès!';
+      if ($paymentMethod == 'cash') {
+        $transactionSuccess .= ' Montant déduit/ajouté à la caisse.';
+      }
       echo "<script>setTimeout(function(){ window.location.href='employee-salary.php'; }, 1500);</script>";
-    } else {
-      $transactionError = 'Erreur lors de l\'enregistrement de la transaction';
+      
+    } catch (Exception $e) {
+      mysqli_rollback($con);
+      $transactionError = $e->getMessage();
     }
   }
 }
 
 // ---------------------------------------------------------------------
-// 3) HANDLE NEW EMPLOYEE
+// 4) HANDLE NEW EMPLOYEE
 // ---------------------------------------------------------------------
 
 if (isset($_POST['submit_employee'])) {
@@ -154,7 +296,7 @@ if (isset($_POST['submit_employee'])) {
 }
 
 // ---------------------------------------------------------------------
-// 4) HANDLE NEW SALARY ADVANCE
+// 5) HANDLE NEW SALARY ADVANCE (MODIFIÉ POUR LA CAISSE)
 // ---------------------------------------------------------------------
 
 if (isset($_POST['submit_advance'])) {
@@ -162,6 +304,7 @@ if (isset($_POST['submit_advance'])) {
   $advanceAmount = floatval($_POST['advance_amount']);
   $reason = mysqli_real_escape_string($con, $_POST['reason']);
   $monthlyDeduction = floatval($_POST['monthly_deduction']);
+  $paymentMethod = $_POST['advance_payment_method']; // NOUVEAU
   $approvedBy = $_SESSION['imsaid']; // Admin ID
 
   // Vérifications
@@ -173,7 +316,12 @@ if (isset($_POST['submit_advance'])) {
     $transactionError = 'La déduction mensuelle doit être supérieure à 0';
   } elseif ($monthlyDeduction > $advanceAmount) {
     $transactionError = 'La déduction mensuelle ne peut pas être supérieure au montant de l\'avance';
-  } else {
+  } 
+  // NOUVEAU: Vérifier le solde de caisse pour les avances en espèces
+  elseif ($paymentMethod == 'cash' && $advanceAmount > $totalCashBalance) {
+    $transactionError = 'Solde en caisse insuffisant pour cette avance en espèces ! Solde disponible: ' . number_format($totalCashBalance, 2);
+  } 
+  else {
     // Vérifier si l'employé a déjà une avance active
     $checkExisting = mysqli_query($con, "
       SELECT ID FROM tblsalaryadvances 
@@ -182,7 +330,7 @@ if (isset($_POST['submit_advance'])) {
     
     // Récupérer le salaire de l'employé pour validation
     $checkSalary = mysqli_query($con, "
-      SELECT BaseSalary FROM tblemployees 
+      SELECT BaseSalary, FullName, Position FROM tblemployees 
       WHERE ID = '$employeeId' AND Status = 'active'
     ");
     
@@ -193,6 +341,8 @@ if (isset($_POST['submit_advance'])) {
     } else {
       $salaryRow = mysqli_fetch_assoc($checkSalary);
       $baseSalary = floatval($salaryRow['BaseSalary']);
+      $employeeName = $salaryRow['FullName'];
+      $employeePosition = $salaryRow['Position'];
       
       // Vérifier que l'avance ne dépasse pas 80% du salaire
       if ($advanceAmount > ($baseSalary * 0.8)) {
@@ -200,20 +350,52 @@ if (isset($_POST['submit_advance'])) {
       } elseif ($monthlyDeduction > ($baseSalary * 0.3)) {
         $transactionError = 'La déduction mensuelle ne peut pas dépasser 30% du salaire (' . number_format($baseSalary * 0.3, 2) . ')';
       } else {
-        // Calculer la date de début des déductions (mois prochain)
-        $deductionStartDate = date('Y-m-01', strtotime('+1 month'));
+        // NOUVEAU: Utiliser une transaction pour la cohérence
+        mysqli_begin_transaction($con);
         
-        // Insérer l'avance
-        $sqlInsertAdvance = "
-          INSERT INTO tblsalaryadvances (EmployeeID, AdvanceDate, Amount, Reason, DeductionStartDate, MonthlyDeduction, RemainingBalance, ApprovedBy)
-          VALUES ('$employeeId', CURDATE(), '$advanceAmount', '$reason', '$deductionStartDate', '$monthlyDeduction', '$advanceAmount', '$approvedBy')
-        ";
-        
-        if (mysqli_query($con, $sqlInsertAdvance)) {
+        try {
+          // Calculer la date de début des déductions (mois prochain)
+          $deductionStartDate = date('Y-m-01', strtotime('+1 month'));
+          
+          // 1) Insérer l'avance
+          $sqlInsertAdvance = "
+            INSERT INTO tblsalaryadvances (EmployeeID, AdvanceDate, Amount, Reason, DeductionStartDate, MonthlyDeduction, RemainingBalance, ApprovedBy)
+            VALUES ('$employeeId', CURDATE(), '$advanceAmount', '$reason', '$deductionStartDate', '$monthlyDeduction', '$advanceAmount', '$approvedBy')
+          ";
+          
+          if (!mysqli_query($con, $sqlInsertAdvance)) {
+            throw new Exception('Erreur lors de l\'enregistrement de l\'avance');
+          }
+          
+          // 2) NOUVEAU: Si c'est en espèces, enregistrer la sortie de caisse
+          if ($paymentMethod == 'cash') {
+            $newCashBalance = $totalCashBalance - $advanceAmount;
+            $cashComment = "Avance sur salaire: " . $employeeName . " (" . $employeePosition . ") - " . $reason;
+            
+            $sqlCashTrans = "
+              INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
+              VALUES(CURDATE(), 'OUT', '$advanceAmount', '$newCashBalance', '$cashComment')
+            ";
+            
+            if (!mysqli_query($con, $sqlCashTrans)) {
+              throw new Exception("Erreur lors de l'enregistrement de la transaction en caisse");
+            }
+            
+            // Mettre à jour le solde
+            $totalCashBalance = $newCashBalance;
+          }
+          
+          // 3) Valider la transaction
+          mysqli_commit($con);
           $transactionSuccess = 'Avance accordée avec succès! Déductions commenceront le ' . date('d/m/Y', strtotime($deductionStartDate));
+          if ($paymentMethod == 'cash') {
+            $transactionSuccess .= ' Montant déduit de la caisse.';
+          }
           echo "<script>setTimeout(function(){ window.location.href='employee-salary.php'; }, 2000);</script>";
-        } else {
-          $transactionError = 'Erreur lors de l\'enregistrement de l\'avance';
+          
+        } catch (Exception $e) {
+          mysqli_rollback($con);
+          $transactionError = $e->getMessage();
         }
       }
     }
@@ -221,7 +403,7 @@ if (isset($_POST['submit_advance'])) {
 }
 
 // ---------------------------------------------------------------------
-// 5) HANDLE ADVANCE PAYMENT/DEDUCTION
+// 6) HANDLE ADVANCE PAYMENT/DEDUCTION
 // ---------------------------------------------------------------------
 
 if (isset($_POST['submit_advance_payment'])) {
@@ -234,8 +416,10 @@ if (isset($_POST['submit_advance_payment'])) {
   } else {
     // Récupérer l'avance actuelle
     $getAdvance = mysqli_query($con, "
-      SELECT * FROM tblsalaryadvances 
-      WHERE ID = '$advanceId' AND Status = 'active'
+      SELECT a.*, e.FullName, e.Position
+      FROM tblsalaryadvances a
+      JOIN tblemployees e ON e.ID = a.EmployeeID
+      WHERE a.ID = '$advanceId' AND a.Status = 'active'
     ");
     
     if (mysqli_num_rows($getAdvance) == 0) {
@@ -393,6 +577,58 @@ if (isset($_POST['submit_advance_payment'])) {
       background-color: #fffacd;
       border-left: 4px solid #ffc107;
     }
+
+    /* NOUVEAUX STYLES POUR LA CAISSE */
+    .cash-balance {
+      border: 1px solid #ccc;
+      padding: 15px;
+      margin-bottom: 20px;
+      border-radius: 4px;
+      background-color: #e6f3ff;
+    }
+
+    .cash-balance.insufficient {
+      background-color: #f2dede;
+      border: 1px solid #ebccd1;
+      color: #a94442;
+    }
+
+    .cash-balance-amount {
+      font-size: 24px;
+      font-weight: bold;
+      display: block;
+      margin: 5px 0;
+    }
+
+    .payment-method-info {
+      background-color: #fcf8e3;
+      border: 1px solid #faebcc;
+      border-radius: 4px;
+      padding: 8px;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    .payment-method-info.cash-warning {
+      background-color: #fff2cc;
+      border-color: #ffc107;
+    }
+
+    .radio.inline {
+      margin-right: 15px;
+    }
+
+    .balance-warning {
+      color: #d9534f;
+      font-weight: bold;
+      font-size: 12px;
+    }
+
+    .balance-info {
+      color: #3a87ad;
+      font-weight: bold;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -422,6 +658,44 @@ if (isset($_POST['submit_advance_payment'])) {
       <strong>Erreur:</strong> <?php echo $transactionError; ?>
     </div>
     <?php endif; ?>
+
+    <!-- ========== AFFICHAGE DU SOLDE DE CAISSE (NOUVEAU) ========== -->
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="cash-balance <?php echo ($totalCashBalance <= 0) ? 'insufficient' : ''; ?>">
+          <div class="row-fluid">
+            <div class="span6">
+              <h4>💰 Solde disponible en caisse:</h4>
+              <span class="cash-balance-amount" style="color: <?php echo ($totalCashBalance <= 0) ? '#d9534f' : '#468847'; ?>;">
+                <?php echo number_format($totalCashBalance, 2); ?>
+              </span>
+              <?php if ($totalCashBalance <= 0): ?>
+                <p style="color: #d9534f;"><strong>⚠️ Attention:</strong> Solde insuffisant pour les paiements en espèces.</p>
+              <?php endif; ?>
+            </div>
+            <div class="span6">
+              <div style="font-size: 12px;">
+                <p><strong>💡 Information importante:</strong></p>
+                <ul style="margin: 0; padding-left: 20px;">
+                  <li><strong>Paiements en espèces:</strong> Vérifiés contre le solde de caisse</li>
+                  <li><strong>Virements bancaires:</strong> N'affectent pas la caisse physique</li>
+                  <li><strong>Avances en espèces:</strong> Déduites automatiquement de la caisse</li>
+                  <li><strong>Déductions:</strong> Remboursements ajoutés à la caisse</li>
+                </ul>
+                
+                <hr style="margin: 10px 0;">
+                <p><strong>📊 Flux du jour:</strong></p>
+                <ul style="margin: 0; padding-left: 20px;">
+                  <li>Ventes: +<?php echo number_format($todayRegularSales, 2); ?></li>
+                  <li>Dépôts: +<?php echo number_format($todayDeposits, 2); ?></li>
+                  <li>Retraits/Paiements: -<?php echo number_format($todayWithdrawals, 2); ?></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     
     <div class="alert-info">
       <strong>Information:</strong> Cette page permet de gérer les employés, leurs salaires et les avances. 
@@ -541,7 +815,7 @@ if (isset($_POST['submit_advance_payment'])) {
     </ul>
 
     <div class="tab-content">
-      <!-- Tab 1: New Transaction -->
+      <!-- Tab 1: New Transaction (MODIFIÉ) -->
       <div id="transactions" class="tab-pane active">
         <div class="widget-box">
           <div class="widget-title">
@@ -549,17 +823,17 @@ if (isset($_POST['submit_advance_payment'])) {
             <h5>Ajouter une nouvelle transaction salariale</h5>
           </div>
           <div class="widget-content nopadding">
-            <form method="post" class="form-horizontal">
+            <form method="post" class="form-horizontal" id="salary-transaction-form">
               <div class="control-group">
                 <label class="control-label">Employé :</label>
                 <div class="controls">
-                  <select name="employee_id" required>
+                  <select name="employee_id" id="employee_select" required>
                     <option value="">-- Sélectionner un employé --</option>
                     <?php
                     $sqlEmployees = "SELECT ID, EmployeeCode, FullName, Position, BaseSalary FROM tblemployees WHERE Status='active' ORDER BY FullName";
                     $resEmployees = mysqli_query($con, $sqlEmployees);
                     while ($emp = mysqli_fetch_assoc($resEmployees)) {
-                      echo "<option value='{$emp['ID']}'>{$emp['FullName']} - {$emp['Position']} (Salaire: " . number_format($emp['BaseSalary'], 2) . ")</option>";
+                      echo "<option value='{$emp['ID']}' data-salary='{$emp['BaseSalary']}'>{$emp['FullName']} - {$emp['Position']} (Salaire: " . number_format($emp['BaseSalary'], 2) . ")</option>";
                     }
                     ?>
                   </select>
@@ -569,7 +843,7 @@ if (isset($_POST['submit_advance_payment'])) {
               <div class="control-group">
                 <label class="control-label">Type de transaction :</label>
                 <div class="controls">
-                  <select name="transaction_type" required>
+                  <select name="transaction_type" id="transaction_type" required>
                     <option value="payment">Paiement de salaire</option>
                     <option value="bonus">Prime/Bonus</option>
                     <option value="deduction">Déduction</option>
@@ -581,19 +855,41 @@ if (isset($_POST['submit_advance_payment'])) {
               <div class="control-group">
                 <label class="control-label">Montant :</label>
                 <div class="controls">
-                  <input type="number" name="amount" step="0.01" min="0.01" required />
+                  <input type="number" name="amount" id="amount_input" step="0.01" min="0.01" required />
+                  <span class="help-inline balance-warning" id="amount_warning" style="display: none;">
+                    ⚠️ Montant supérieur au solde de caisse disponible !
+                  </span>
                 </div>
               </div>
 
+              <!-- MODIFICATION IMPORTANTE: Méthode de paiement avec vérification -->
               <div class="control-group">
                 <label class="control-label">Méthode de paiement :</label>
                 <div class="controls">
-                  <select name="payment_method" required>
-                    <option value="bank_transfer">Virement bancaire</option>
-                    <option value="cash">Espèces</option>
-                    <option value="check">Chèque</option>
-                    <option value="mobile_money">Mobile Money</option>
-                  </select>
+                  <label class="radio inline">
+                    <input type="radio" name="payment_method" value="bank_transfer" checked id="bank_transfer"> 
+                    Virement bancaire <small>(recommandé)</small>
+                  </label>
+                  <label class="radio inline">
+                    <input type="radio" name="payment_method" value="cash" id="cash_payment"> 
+                    Espèces <small>(vérifié contre caisse)</small>
+                  </label>
+                  <label class="radio inline">
+                    <input type="radio" name="payment_method" value="check" id="check_payment"> 
+                    Chèque
+                  </label>
+                  <label class="radio inline">
+                    <input type="radio" name="payment_method" value="mobile_money" id="mobile_payment"> 
+                    Mobile Money
+                  </label>
+                  
+                  <div class="payment-method-info cash-warning" id="cash_warning" style="display: none;">
+                    <small>
+                      <strong>💰 Paiement en espèces:</strong> 
+                      <span id="cash_balance_info">Solde de caisse: <?php echo number_format($totalCashBalance, 2); ?></span>
+                      <br><strong>⚠️ Important:</strong> Ce montant sera automatiquement déduit de la caisse physique.
+                    </small>
+                  </div>
                 </div>
               </div>
 
@@ -612,9 +908,12 @@ if (isset($_POST['submit_advance_payment'])) {
               </div>
 
               <div class="form-actions">
-                <button type="submit" name="submit_transaction" class="btn btn-success">
+                <button type="submit" name="submit_transaction" class="btn btn-success" id="submit_btn">
                   Enregistrer la transaction
                 </button>
+                <span class="help-inline balance-warning" id="submit_warning" style="display: none;">
+                  Impossible d'effectuer ce paiement en espèces: solde de caisse insuffisant
+                </span>
               </div>
             </form>
           </div>
@@ -766,6 +1065,29 @@ if (isset($_POST['submit_advance_payment'])) {
                         <span id="max-deduction-info" style="color: #3a87ad;"></span>
                         <br><span id="months-info" style="color: #856404;"></span>
                       </span>
+                    </div>
+                  </div>
+
+                  <!-- NOUVEAU: Méthode de paiement pour avances -->
+                  <div class="control-group">
+                    <label class="control-label">Méthode de paiement avance :</label>
+                    <div class="controls">
+                      <label class="radio inline">
+                        <input type="radio" name="advance_payment_method" value="bank_transfer" checked id="advance_bank"> 
+                        Virement bancaire
+                      </label>
+                      <label class="radio inline">
+                        <input type="radio" name="advance_payment_method" value="cash" id="advance_cash"> 
+                        Espèces <small>(déduit de la caisse)</small>
+                      </label>
+                      
+                      <div class="payment-method-info cash-warning" id="advance_cash_warning" style="display: none;">
+                        <small>
+                          <strong>💰 Avance en espèces:</strong> 
+                          Solde de caisse: <?php echo number_format($totalCashBalance, 2); ?>
+                          <br><strong>⚠️ Important:</strong> Cette avance sera automatiquement déduite de la caisse physique.
+                        </small>
+                      </div>
                     </div>
                   </div>
 
@@ -1119,38 +1441,102 @@ if (isset($_POST['submit_advance_payment'])) {
 
 <script>
 $(document).ready(function() {
+  var totalCashBalance = <?php echo $totalCashBalance; ?>;
+  
+  // Fonction pour vérifier le solde de caisse
+  function checkCashBalance() {
+    var amount = parseFloat($('#amount_input').val()) || 0;
+    var paymentMethod = $('input[name="payment_method"]:checked').val();
+    var transactionType = $('#transaction_type').val();
+    
+    // Vérifier seulement pour les paiements en espèces
+    if (paymentMethod === 'cash' && (transactionType === 'payment' || transactionType === 'bonus')) {
+      if (amount > totalCashBalance) {
+        $('#amount_warning').show();
+        $('#submit_warning').show();
+        $('#submit_btn').prop('disabled', true);
+        return false;
+      }
+    }
+    
+    $('#amount_warning').hide();
+    $('#submit_warning').hide();
+    $('#submit_btn').prop('disabled', false);
+    return true;
+  }
+  
+  // Afficher/masquer l'avertissement de caisse
+  $('input[name="payment_method"]').on('change', function() {
+    if ($(this).val() === 'cash') {
+      $('#cash_warning').show();
+    } else {
+      $('#cash_warning').hide();
+    }
+    checkCashBalance();
+  });
+  
+  // Vérifier le montant en temps réel
+  $('#amount_input, #transaction_type').on('input change', function() {
+    checkCashBalance();
+  });
+  
+  // Pour les avances
+  $('input[name="advance_payment_method"]').on('change', function() {
+    if ($(this).val() === 'cash') {
+      $('#advance_cash_warning').show();
+    } else {
+      $('#advance_cash_warning').hide();
+    }
+  });
+  
+  // Validation du formulaire
+  $('#salary-transaction-form').on('submit', function(e) {
+    if (!checkCashBalance()) {
+      e.preventDefault();
+      alert('Impossible d\'effectuer ce paiement en espèces: solde de caisse insuffisant.');
+      return false;
+    }
+    
+    var paymentMethod = $('input[name="payment_method"]:checked').val();
+    if (paymentMethod === 'cash') {
+      var amount = parseFloat($('#amount_input').val()) || 0;
+      if (!confirm('Confirmer le paiement en espèces de ' + amount.toFixed(2) + ' ?\n\nCe montant sera déduit de la caisse physique.')) {
+        e.preventDefault();
+        return false;
+      }
+    }
+    
+    return true;
+  });
+  
   // Auto-fill salary amount when employee is selected for payment
-  $('select[name="employee_id"]').on('change', function() {
+  $('#employee_select').on('change', function() {
     var selectedOption = $(this).find('option:selected');
-    var transactionType = $('select[name="transaction_type"]').val();
+    var transactionType = $('#transaction_type').val();
     
     if (selectedOption.val() && transactionType === 'payment') {
-      // Extract salary from option text (format: Name - Position (Salaire: XX.XX))
-      var optionText = selectedOption.text();
-      var salaryMatch = optionText.match(/Salaire: ([\d,]+\.?\d*)/);
-      if (salaryMatch) {
-        var salary = salaryMatch[1].replace(/,/g, '');
-        $('input[name="amount"]').val(salary);
+      var salary = selectedOption.data('salary');
+      if (salary) {
+        $('#amount_input').val(salary);
+        checkCashBalance();
       }
     }
   });
   
   // Update amount field when transaction type changes
-  $('select[name="transaction_type"]').on('change', function() {
+  $('#transaction_type').on('change', function() {
     var transactionType = $(this).val();
-    var selectedEmployee = $('select[name="employee_id"]').find('option:selected');
+    var selectedEmployee = $('#employee_select').find('option:selected');
     
     if (transactionType === 'payment' && selectedEmployee.val()) {
-      // Auto-fill with employee's base salary
-      var optionText = selectedEmployee.text();
-      var salaryMatch = optionText.match(/Salaire: ([\d,]+\.?\d*)/);
-      if (salaryMatch) {
-        var salary = salaryMatch[1].replace(/,/g, '');
-        $('input[name="amount"]').val(salary);
+      var salary = selectedEmployee.data('salary');
+      if (salary) {
+        $('#amount_input').val(salary);
       }
     } else {
-      $('input[name="amount"]').val('');
+      $('#amount_input').val('');
     }
+    checkCashBalance();
   });
   
   // Generate employee code automatically
