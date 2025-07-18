@@ -50,15 +50,20 @@ $adjustmentsMade = floatval($rowPaymentsMade['adjustments']);
 // 1.3 Outstanding salary balance
 $outstandingSalaries = $monthlyObligations - $salaryPaymentsMade;
 
-// 1.4 Total advances outstanding
-$sqlAdvancesOutstanding = "
-  SELECT COALESCE(SUM(RemainingBalance), 0) AS totalAdvances
+// 1.4 AVANCES SUR SALAIRE - Calculs
+$sqlActiveAdvances = "
+  SELECT 
+    COUNT(*) AS totalAdvances,
+    COALESCE(SUM(Amount), 0) AS totalAmount,
+    COALESCE(SUM(RemainingBalance), 0) AS totalRemaining
   FROM tblsalaryadvances
   WHERE Status = 'active'
 ";
-$resAdvancesOutstanding = mysqli_query($con, $sqlAdvancesOutstanding);
-$rowAdvancesOutstanding = mysqli_fetch_assoc($resAdvancesOutstanding);
-$outstandingAdvances = floatval($rowAdvancesOutstanding['totalAdvances']);
+$resActiveAdvances = mysqli_query($con, $sqlActiveAdvances);
+$rowActiveAdvances = mysqli_fetch_assoc($resActiveAdvances);
+$totalActiveAdvances = intval($rowActiveAdvances['totalAdvances']);
+$totalAdvanceAmount = floatval($rowActiveAdvances['totalAmount']);
+$totalRemainingBalance = floatval($rowActiveAdvances['totalRemaining']);
 
 // 1.5 Get employees who haven't been paid this month
 $sqlUnpaidEmployees = "
@@ -74,21 +79,6 @@ $sqlUnpaidEmployees = "
     )
 ";
 $resUnpaidEmployees = mysqli_query($con, $sqlUnpaidEmployees);
-
-// 1.6 AVANCES SUR SALAIRE - Calculs
-$sqlActiveAdvances = "
-  SELECT 
-    COUNT(*) AS totalAdvances,
-    COALESCE(SUM(Amount), 0) AS totalAmount,
-    COALESCE(SUM(RemainingBalance), 0) AS totalRemaining
-  FROM tblsalaryadvances
-  WHERE Status = 'active'
-";
-$resActiveAdvances = mysqli_query($con, $sqlActiveAdvances);
-$rowActiveAdvances = mysqli_fetch_assoc($resActiveAdvances);
-$totalActiveAdvances = intval($rowActiveAdvances['totalAdvances']);
-$totalAdvanceAmount = floatval($rowActiveAdvances['totalAmount']);
-$totalRemainingBalance = floatval($rowActiveAdvances['totalRemaining']);
 
 // ---------------------------------------------------------------------
 // 2) HANDLE NEW SALARY TRANSACTION
@@ -292,7 +282,7 @@ if (isset($_POST['submit_advance_payment'])) {
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <title>Gestion d'inventaire | Gestion des salaires</title>
+  <title>Gestion d'inventaire | Gestion des employés et salaires</title>
   <?php include_once('includes/cs.php'); ?>
   <?php include_once('includes/responsive.php'); ?>
   <style>
@@ -413,7 +403,7 @@ if (isset($_POST['submit_advance_payment'])) {
   <div id="content-header">
     <div id="breadcrumb">
       <a href="dashboard.php" class="tip-bottom"><i class="icon-home"></i> Accueil</a>
-      <a href="employee-salary.php" class="current">Gestion des salaires</a>
+      <a href="employee-salary.php" class="current">Gestion des employés et salaires</a>
     </div>
     <h1>Gestion des employés et salaires (PÉRIODE: <?php echo $currentMonthName; ?>)</h1>
   </div>
@@ -516,10 +506,22 @@ if (isset($_POST['submit_advance_payment'])) {
                 <?php endif; ?>
                 
                 <hr>
+                <h5>📊 Résumé avances:</h5>
+                <?php if ($totalActiveAdvances > 0): ?>
+                  <p><small>
+                    • <strong><?php echo $totalActiveAdvances; ?> avance(s) active(s)</strong><br>
+                    • Montant total: <?php echo number_format($totalAdvanceAmount, 2); ?><br>
+                    • Reste à recouvrer: <span class="text-warning"><?php echo number_format($totalRemainingBalance, 2); ?></span>
+                  </small></p>
+                <?php else: ?>
+                  <p class="text-success"><small><strong>✓ Aucune avance en cours!</strong></small></p>
+                <?php endif; ?>
+                
+                <hr>
                 <h5>Actions rapides:</h5>
                 <p><small>
                   • Utilisez l'onglet "Nouvelle transaction" pour enregistrer un paiement<br>
-                  • Utilisez l'onglet "Nouvel employé" pour ajouter un employé<br>
+                  • Utilisez l'onglet "Avances" pour gérer les avances sur salaire<br>
                   • Les calculs se mettent à jour automatiquement
                 </small></p>
               </div>
@@ -533,7 +535,7 @@ if (isset($_POST['submit_advance_payment'])) {
     <ul class="nav nav-tabs">
       <li class="active"><a href="#transactions" data-toggle="tab">Nouvelle transaction salariale</a></li>
       <li><a href="#new-employee" data-toggle="tab">Nouvel employé</a></li>
-      <li><a href="#salary-advances" data-toggle="tab">Avances sur salaire (<?php echo $totalActiveAdvances; ?>)</a></li>
+      <li><a href="#salary-advances" data-toggle="tab">💰 Avances sur salaire (<?php echo $totalActiveAdvances; ?>)</a></li>
       <li><a href="#current-transactions" data-toggle="tab">Transactions du mois</a></li>
       <li><a href="#employee-list" data-toggle="tab">Liste des employés</a></li>
     </ul>
@@ -1054,7 +1056,7 @@ if (isset($_POST['submit_advance_payment'])) {
                   $hasAdvance = !empty($emp['AdvanceAmount']);
                   $rowClass = '';
                   if ($isUnpaid) $rowClass .= 'unpaid-employee ';
-                  if ($hasAdvance) $rowClass .= 'highlight-daily ';
+                  if ($hasAdvance) $rowClass .= 'advance-highlight ';
                 ?>
                 <tr class="<?php echo trim($rowClass); ?>">
                   <td><?php echo $emp['EmployeeCode']; ?></td>
@@ -1204,7 +1206,7 @@ $(document).ready(function() {
     }
   });
   
-  // Suggestion automatique de déduction (20% de l'avance ou max 30% du salaire)
+  // Suggestion automatique de déduction (25% de l'avance ou max 30% du salaire)
   $('#advance_amount').on('blur', function() {
     var advanceAmount = parseFloat($(this).val()) || 0;
     if (advanceAmount > 0 && !$('#monthly_deduction').val()) {
