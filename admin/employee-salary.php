@@ -240,7 +240,6 @@ if (isset($_POST['submit_transaction'])) {
         // Déterminer le type de transaction de caisse
         if (in_array($transactionType, ['payment', 'bonus'])) {
           // C'est une sortie de caisse
-          $newCashBalance = $todayBalance - $amount;
           $cashComment = ucfirst($transactionType) . " en espèces: " . $employeeName;
           if (!empty($employeePosition)) {
             $cashComment .= " (" . $employeePosition . ")";
@@ -249,13 +248,15 @@ if (isset($_POST['submit_transaction'])) {
             $cashComment .= " - " . $description;
           }
           
+          // Calculer le nouveau solde après cette transaction
+          $newCashBalance = $todayBalance - $amount;
+          
           $sqlCashTrans = "
             INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
             VALUES(NOW(), 'OUT', '$amount', '$newCashBalance', '$cashComment')
           ";
         } else {
           // Déduction ou ajustement = entrée en caisse (remboursement)
-          $newCashBalance = $todayBalance + $amount;
           $cashComment = ucfirst($transactionType) . " en espèces: " . $employeeName;
           if (!empty($employeePosition)) {
             $cashComment .= " (" . $employeePosition . ")";
@@ -263,6 +264,9 @@ if (isset($_POST['submit_transaction'])) {
           if (!empty($description)) {
             $cashComment .= " - " . $description;
           }
+          
+          // Calculer le nouveau solde après cette transaction
+          $newCashBalance = $todayBalance + $amount;
           
           $sqlCashTrans = "
             INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
@@ -274,8 +278,21 @@ if (isset($_POST['submit_transaction'])) {
           throw new Exception("Erreur lors de l'enregistrement de la transaction en caisse");
         }
         
-        // Mettre à jour le solde du jour
-        $todayBalance = $newCashBalance;
+        // CORRECTION: Recalculer complètement le solde du jour après la transaction
+        $sqlRecalcManualTransactions = "
+          SELECT
+            COALESCE(SUM(CASE WHEN TransType='IN' THEN Amount ELSE 0 END), 0) AS deposits,
+            COALESCE(SUM(CASE WHEN TransType='OUT' THEN Amount ELSE 0 END), 0) AS withdrawals
+          FROM tblcashtransactions
+          WHERE DATE(TransDate) = CURDATE()
+        ";
+        $resRecalcManualTransactions = mysqli_query($con, $sqlRecalcManualTransactions);
+        $rowRecalcManualTransactions = mysqli_fetch_assoc($resRecalcManualTransactions);
+        $todayDeposits = floatval($rowRecalcManualTransactions['deposits']);
+        $todayWithdrawals = floatval($rowRecalcManualTransactions['withdrawals']);
+        
+        // Recalculer le solde total du jour
+        $todayBalance = $todayDeposits + $todayRegularSales + $cashPayments - ($todayWithdrawals + $todayReturns);
       }
       
       // 3) Valider la transaction
@@ -284,6 +301,15 @@ if (isset($_POST['submit_transaction'])) {
       if ($paymentMethod == 'cash') {
         $transactionSuccess .= ' Montant déduit/ajouté à la caisse du jour.';
       }
+      
+      // CORRECTION: Passer le nouveau solde au JavaScript
+      echo "<script>
+        if (typeof todayBalance !== 'undefined') {
+          todayBalance = " . $todayBalance . ";
+          // Mettre à jour l'affichage du solde
+          updateCashBalanceDisplay(" . $todayBalance . ");
+        }
+      </script>";
       echo "<script>setTimeout(function(){ window.location.href='employee-salary.php'; }, 1500);</script>";
       
     } catch (Exception $e) {
@@ -404,8 +430,10 @@ if (isset($_POST['submit_advance'])) {
           
           // 2) Si c'est en espèces, enregistrer la sortie de caisse
           if ($paymentMethod == 'cash') {
-            $newCashBalance = $todayBalance - $advanceAmount;
             $cashComment = "Avance sur salaire: " . $employeeName . " (" . $employeePosition . ") - " . $reason;
+            
+            // Calculer le nouveau solde après cette transaction
+            $newCashBalance = $todayBalance - $advanceAmount;
             
             $sqlCashTrans = "
               INSERT INTO tblcashtransactions(TransDate, TransType, Amount, BalanceAfter, Comments)
@@ -416,8 +444,21 @@ if (isset($_POST['submit_advance'])) {
               throw new Exception("Erreur lors de l'enregistrement de la transaction en caisse");
             }
             
-            // Mettre à jour le solde
-            $todayBalance = $newCashBalance;
+            // CORRECTION: Recalculer complètement le solde du jour après la transaction
+            $sqlRecalcManualTransactions = "
+              SELECT
+                COALESCE(SUM(CASE WHEN TransType='IN' THEN Amount ELSE 0 END), 0) AS deposits,
+                COALESCE(SUM(CASE WHEN TransType='OUT' THEN Amount ELSE 0 END), 0) AS withdrawals
+              FROM tblcashtransactions
+              WHERE DATE(TransDate) = CURDATE()
+            ";
+            $resRecalcManualTransactions = mysqli_query($con, $sqlRecalcManualTransactions);
+            $rowRecalcManualTransactions = mysqli_fetch_assoc($resRecalcManualTransactions);
+            $todayDeposits = floatval($rowRecalcManualTransactions['deposits']);
+            $todayWithdrawals = floatval($rowRecalcManualTransactions['withdrawals']);
+            
+            // Recalculer le solde total du jour
+            $todayBalance = $todayDeposits + $todayRegularSales + $cashPayments - ($todayWithdrawals + $todayReturns);
           }
           
           // 3) Valider la transaction
@@ -426,6 +467,15 @@ if (isset($_POST['submit_advance'])) {
           if ($paymentMethod == 'cash') {
             $transactionSuccess .= ' Montant déduit de la caisse du jour.';
           }
+          
+          // CORRECTION: Passer le nouveau solde au JavaScript  
+          echo "<script>
+            if (typeof todayBalance !== 'undefined') {
+              todayBalance = " . $todayBalance . ";
+              // Mettre à jour l'affichage du solde
+              updateCashBalanceDisplay(" . $todayBalance . ");
+            }
+          </script>";
           echo "<script>setTimeout(function(){ window.location.href='employee-salary.php'; }, 2000);</script>";
           
         } catch (Exception $e) {
@@ -1502,36 +1552,84 @@ if (isset($_POST['submit_advance_payment'])) {
 <script src="js/matrix.tables.js"></script>
 
 <script>
+// Fonction pour mettre à jour l'affichage du solde de caisse
+function updateCashBalanceDisplay(newBalance) {
+  // Mettre à jour le montant affiché
+  $('.cash-balance-amount').text(newBalance.toFixed(2));
+  
+  // Mettre à jour la couleur selon le solde
+  if (newBalance <= 0) {
+    $('.cash-balance-amount').css('color', '#d9534f');
+    $('.cash-balance').addClass('insufficient');
+  } else {
+    $('.cash-balance-amount').css('color', '#468847');
+    $('.cash-balance').removeClass('insufficient');
+  }
+  
+  // Mettre à jour les informations de solde dans les avertissements
+  $('#cash_balance_info').text('Solde de caisse du jour: ' + newBalance.toFixed(2));
+  
+  // Recalculer les vérifications de solde
+  checkCashBalance();
+}
+
+// Fonction pour vérifier le solde de caisse du jour
+function checkCashBalance() {
+  var amount = parseFloat($('#amount_input').val()) || 0;
+  var paymentMethod = $('input[name="payment_method"]:checked').val();
+  var transactionType = $('#transaction_type').val();
+  
+  // Vérifier seulement pour les paiements en espèces
+  if (paymentMethod === 'cash' && (transactionType === 'payment' || transactionType === 'bonus')) {
+    if (amount > window.todayBalance) {
+      $('#amount_warning').show();
+      $('#submit_warning').show();
+      $('#submit_btn').prop('disabled', true);
+      return false;
+    }
+  }
+  
+  $('#amount_warning').hide();
+  $('#submit_warning').hide();
+  $('#submit_btn').prop('disabled', false);
+  return true;
+}
+
+// Fonction pour mettre à jour l'affichage du solde de caisse
+function updateCashBalanceDisplay(newBalance) {
+  // Mettre à jour la variable globale
+  window.todayBalance = newBalance;
+  
+  // Mettre à jour le montant affiché
+  $('.cash-balance-amount').text(newBalance.toFixed(2));
+  
+  // Mettre à jour la couleur selon le solde
+  if (newBalance <= 0) {
+    $('.cash-balance-amount').css('color', '#d9534f');
+    $('.cash-balance').addClass('insufficient');
+  } else {
+    $('.cash-balance-amount').css('color', '#468847');
+    $('.cash-balance').removeClass('insufficient');
+  }
+  
+  // Mettre à jour les informations de solde dans les avertissements
+  $('#cash_balance_info').text('Solde de caisse du jour: ' + newBalance.toFixed(2));
+  
+  // Recalculer les vérifications de solde
+  checkCashBalance();
+}
+
 $(document).ready(function() {
   var todayBalance = <?php echo $todayBalance; ?>;
   
-  // Fonction pour vérifier le solde de caisse du jour
-  function checkCashBalance() {
-    var amount = parseFloat($('#amount_input').val()) || 0;
-    var paymentMethod = $('input[name="payment_method"]:checked').val();
-    var transactionType = $('#transaction_type').val();
-    
-    // Vérifier seulement pour les paiements en espèces
-    if (paymentMethod === 'cash' && (transactionType === 'payment' || transactionType === 'bonus')) {
-      if (amount > todayBalance) {
-        $('#amount_warning').show();
-        $('#submit_warning').show();
-        $('#submit_btn').prop('disabled', true);
-        return false;
-      }
-    }
-    
-    $('#amount_warning').hide();
-    $('#submit_warning').hide();
-    $('#submit_btn').prop('disabled', false);
-    return true;
-  }
+  // Rendre la variable accessible globalement
+  window.todayBalance = todayBalance;
   
   // Afficher/masquer l'avertissement de caisse
   $('input[name="payment_method"]').on('change', function() {
     if ($(this).val() === 'cash') {
       $('#cash_warning').show();
-      $('#cash_balance_info').text('Solde de caisse du jour: ' + todayBalance.toFixed(2));
+      $('#cash_balance_info').text('Solde de caisse du jour: ' + window.todayBalance.toFixed(2));
     } else {
       $('#cash_warning').hide();
     }
