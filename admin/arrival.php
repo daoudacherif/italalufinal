@@ -35,6 +35,8 @@ if ($tableCheck) {
 // 1) Handle arrival submission (multiple products)
 if (isset($_POST['submit'])) {
     $arrivalDate = $_POST['arrivaldate'];
+    $deliveryDate = $_POST['deliverydate']; // NOUVEAU
+    $deliveryNote = mysqli_real_escape_string($con, $_POST['deliverynote']); // NOUVEAU
     $supplierID = intval($_POST['supplierid']);
     
     // Check if we have products to process
@@ -82,10 +84,10 @@ if (isset($_POST['submit'])) {
             // Calculate total cost avec prix personnalisé
             $cost = $customPrice * $quantity;
             
-            // Insert into tblproductarrivals
+            // Insert into tblproductarrivals avec les nouveaux champs
             $sqlInsert = "
-              INSERT INTO tblproductarrivals(ProductID, SupplierID, ArrivalDate, Quantity, Cost, Comments)
-              VALUES('$productID', '$supplierID', '$arrivalDate', '$quantity', '$cost', '$comment')
+              INSERT INTO tblproductarrivals(ProductID, SupplierID, ArrivalDate, DeliveryDate, DeliveryNote, Quantity, Cost, Comments)
+              VALUES('$productID', '$supplierID', '$arrivalDate', '$deliveryDate', '$deliveryNote', '$quantity', '$cost', '$comment')
             ";
             $queryInsert = mysqli_query($con, $sqlInsert);
             
@@ -133,6 +135,8 @@ if (isset($_POST['submit'])) {
 // FIX: Add handling for the single product form
 if (isset($_POST['submit_single'])) {
     $arrivalDate = $_POST['arrivaldate'];
+    $deliveryDate = $_POST['deliverydate']; // NOUVEAU
+    $deliveryNote = mysqli_real_escape_string($con, $_POST['deliverynote']); // NOUVEAU
     $supplierID = intval($_POST['supplierid']);
     $productID = intval($_POST['productid']);
     $quantity = intval($_POST['quantity']);
@@ -161,10 +165,10 @@ if (isset($_POST['submit_single'])) {
     $currentStock = isset($stockRow[$stockColumnName]) ? intval($stockRow[$stockColumnName]) : 0;
     $newStock = $currentStock + $quantity;
     
-    // Insert into tblproductarrivals
+    // Insert into tblproductarrivals avec les nouveaux champs
     $sqlInsert = "
-      INSERT INTO tblproductarrivals(ProductID, SupplierID, ArrivalDate, Quantity, Cost, Comments)
-      VALUES('$productID', '$supplierID', '$arrivalDate', '$quantity', '$cost', '$comment')
+      INSERT INTO tblproductarrivals(ProductID, SupplierID, ArrivalDate, DeliveryDate, DeliveryNote, Quantity, Cost, Comments)
+      VALUES('$productID', '$supplierID', '$arrivalDate', '$deliveryDate', '$deliveryNote', '$quantity', '$cost', '$comment')
     ";
     $queryInsert = mysqli_query($con, $sqlInsert);
     
@@ -176,7 +180,7 @@ if (isset($_POST['submit_single'])) {
         if ($updateResult) {
             // Check if any rows were actually updated
             if (mysqli_affected_rows($con) > 0) {
-                echo "<script>alert('Arrivage enregistré avec succès! Stock: $currentStock -> $newStock. Coût: $cost');</script>";
+                echo "<script>alert('Arrivage enregistré avec succès! Stock: $currentStock -> $newStock. Coût: $cost. Bon: $deliveryNote');</script>";
             } else {
                 echo "<script>alert('Produit trouvé mais stock non modifié. Vérifiez que l\\'ID du produit est correct.');</script>";
             }
@@ -274,10 +278,12 @@ if ($productNamesQuery) {
     }
 }
 
-// 5) Liste des arrivages récents
+// 5) Liste des arrivages récents - MODIFIÉ pour inclure les nouveaux champs
 $sqlArrivals = "
   SELECT a.ID as arrivalID,
          a.ArrivalDate,
+         a.DeliveryDate,
+         a.DeliveryNote,
          a.Quantity,
          a.Cost,
          a.Comments,
@@ -326,6 +332,79 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
     font-weight: bold;
     color: #007bff;
   }
+  
+  /* NOUVEAUX STYLES POUR LES CHAMPS DE LIVRAISON */
+  .delivery-fields {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    padding: 15px;
+    margin: 10px 0;
+  }
+  
+  .delivery-note {
+    background-color: #e3f2fd;
+    border: 1px solid #2196f3;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+  }
+  
+  .delivery-date {
+    background-color: #fff3e0;
+    border: 1px solid #ff9800;
+    border-radius: 3px;
+  }
+  
+  .delivery-info {
+    font-size: 12px;
+    color: #6c757d;
+    margin-top: 5px;
+  }
+  
+  .delivery-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 10px;
+    background-color: #28a745;
+    color: white;
+    border-radius: 10px;
+    margin-left: 5px;
+  }
+  
+  .delivery-missing {
+    color: #dc3545;
+    font-style: italic;
+  }
+  
+  .arrivals-table {
+    font-size: 12px;
+  }
+  
+  .arrivals-table th {
+    background-color: #343a40;
+    color: white;
+    text-align: center;
+  }
+  
+  .arrivals-table .delivery-note-cell {
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    color: #007bff;
+  }
+  
+  .arrivals-table .delivery-date-cell {
+    color: #28a745;
+    font-weight: 500;
+  }
+  
+  /* Responsive improvements */
+  @media (max-width: 768px) {
+    .delivery-fields .span4,
+    .delivery-fields .span6 {
+      width: 100%;
+      margin-bottom: 10px;
+    }
+  }
 </style>
 <head>
     <title>Gestion de Stock | Arrivages de Produits</title>
@@ -342,7 +421,7 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
       <a href="dashboard.php" class="tip-bottom"><i class="icon-home"></i> Accueil</a>
       <a href="arrival.php" class="current">Arrivages de Produits</a>
     </div>
-    <h1>Gérer les Arrivages de Produits (Entrée Stock + Prix Personnalisé)</h1>
+    <h1>🚚 Gérer les Arrivages de Produits (Entrée Stock + Prix Personnalisé + Bon de Livraison)</h1>
   </div>
 
   <div class="container-fluid">
@@ -495,7 +574,7 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
         <div class="widget-box">
           <div class="widget-title">
             <span class="icon"><i class="icon-th"></i></span>
-            <h5>Arrivages de Produits en Attente</h5>
+            <h5>📦 Arrivages de Produits en Attente</h5>
             <?php if (isset($_SESSION['temp_arrivals']) && count($_SESSION['temp_arrivals']) > 0) { ?>
             <a href="arrival.php?clear=1" class="btn btn-small btn-danger" style="float:right;margin:3px;">
               <i class="icon-remove"></i> Tout Effacer
@@ -569,28 +648,53 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
                   </tr>
                   <tr>
                     <td colspan="8" style="padding: 15px;">
-                      <div class="row-fluid">
-                        <div class="span6">
-                          <div class="control-group">
-                            <label class="control-label">Date d'Arrivage:</label>
-                            <div class="controls">
-                              <input type="date" name="arrivaldate" value="<?php echo date('Y-m-d'); ?>" required />
+                      <!-- NOUVELLE SECTION INFORMATIONS DE LIVRAISON -->
+                      <div class="delivery-fields">
+                        <h6 style="margin-top: 0; color: #495057;"><i class="icon-truck"></i> 🚚 Informations de Livraison</h6>
+                        <div class="row-fluid">
+                          <div class="span4">
+                            <div class="control-group">
+                              <label class="control-label">Date d'Arrivage:</label>
+                              <div class="controls">
+                                <input type="date" name="arrivaldate" value="<?php echo date('Y-m-d'); ?>" required />
+                                <span class="help-inline">Date de réception en stock</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="span4">
+                            <div class="control-group">
+                              <label class="control-label">Date de Livraison:</label>
+                              <div class="controls">
+                                <input type="date" name="deliverydate" value="<?php echo date('Y-m-d'); ?>" class="delivery-date" />
+                                <span class="help-inline">Date de livraison par le fournisseur</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="span4">
+                            <div class="control-group">
+                              <label class="control-label">N° Bon de Livraison:</label>
+                              <div class="controls">
+                                <input type="text" name="deliverynote" placeholder="Ex: BL2025-001" maxlength="100" class="delivery-note" />
+                                <span class="help-inline">Numéro du bon de livraison</span>
+                              </div>
                             </div>
                           </div>
                         </div>
-                        <div class="span6">
-                          <div class="control-group">
-                            <label class="control-label">Sélectionner Fournisseur:</label>
-                            <div class="controls">
-                              <select name="supplierid" required>
-                                <option value="">-- Choisir Fournisseur --</option>
-                                <?php
-                                $suppQ = mysqli_query($con, "SELECT ID, SupplierName FROM tblsupplier ORDER BY SupplierName ASC");
-                                while ($sRow = mysqli_fetch_assoc($suppQ)) {
-                                  echo '<option value="'.$sRow['ID'].'">'.$sRow['SupplierName'].'</option>';
-                                }
-                                ?>
-                              </select>
+                        <div class="row-fluid">
+                          <div class="span12">
+                            <div class="control-group">
+                              <label class="control-label">Sélectionner Fournisseur:</label>
+                              <div class="controls">
+                                <select name="supplierid" required>
+                                  <option value="">-- Choisir Fournisseur --</option>
+                                  <?php
+                                  $suppQ = mysqli_query($con, "SELECT ID, SupplierName FROM tblsupplier ORDER BY SupplierName ASC");
+                                  while ($sRow = mysqli_fetch_assoc($suppQ)) {
+                                    echo '<option value="'.$sRow['ID'].'">'.$sRow['SupplierName'].'</option>';
+                                  }
+                                  ?>
+                                </select>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -602,7 +706,7 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
                           Total: <strong><span class="cart-total"><?php echo number_format($totalPanier, 2); ?></span> Gnf</strong>
                         </div>
                         <button type="submit" name="submit" class="btn btn-success btn-large">
-                          <i class="icon-check"></i> Enregistrer Tous les Arrivages (<span class="cart-total"><?php echo number_format($totalPanier, 2); ?></span> Gnf)
+                          <i class="icon-check"></i> 📦 Enregistrer Tous les Arrivages (<span class="cart-total"><?php echo number_format($totalPanier, 2); ?></span> Gnf)
                         </button>
                       </div>
                     </td>
@@ -628,15 +732,40 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
         <div class="widget-box">
           <div class="widget-title">
             <span class="icon"><i class="icon-align-justify"></i></span>
-            <h5>Ajout Rapide d'Arrivage Produit Unique</h5>
+            <h5>⚡ Ajout Rapide d'Arrivage Produit Unique</h5>
           </div>
           <div class="widget-content nopadding">
             <form method="post" class="form-horizontal" id="singleArrivalForm">
-              <!-- Arrival Date -->
-              <div class="control-group">
-                <label class="control-label">Date d'Arrivage:</label>
-                <div class="controls">
-                  <input type="date" name="arrivaldate" value="<?php echo date('Y-m-d'); ?>" required />
+              
+              <!-- NOUVELLE SECTION INFORMATIONS DE LIVRAISON -->
+              <div class="delivery-fields">
+                <h6 style="margin-top: 0; color: #495057;"><i class="icon-truck"></i> 🚚 Informations de Livraison</h6>
+                
+                <!-- Arrival Date -->
+                <div class="control-group">
+                  <label class="control-label">Date d'Arrivage:</label>
+                  <div class="controls">
+                    <input type="date" name="arrivaldate" value="<?php echo date('Y-m-d'); ?>" required />
+                    <span class="help-inline">Date de réception en stock</span>
+                  </div>
+                </div>
+
+                <!-- Delivery Date -->
+                <div class="control-group">
+                  <label class="control-label">Date de Livraison:</label>
+                  <div class="controls">
+                    <input type="date" name="deliverydate" value="<?php echo date('Y-m-d'); ?>" class="delivery-date" />
+                    <span class="help-inline">Date de livraison par le fournisseur</span>
+                  </div>
+                </div>
+
+                <!-- Delivery Note -->
+                <div class="control-group">
+                  <label class="control-label">N° Bon de Livraison:</label>
+                  <div class="controls">
+                    <input type="text" name="deliverynote" placeholder="Ex: BL2025-001" maxlength="100" class="delivery-note" />
+                    <span class="help-inline">Numéro du bon de livraison du fournisseur</span>
+                  </div>
                 </div>
               </div>
 
@@ -711,7 +840,7 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
 
               <div class="form-actions">
                 <button type="submit" name="submit_single" class="btn btn-success">
-                  Enregistrer l'Arrivage Unique
+                  📦 Enregistrer l'Arrivage Unique
                 </button>
               </div>
             </form>
@@ -722,20 +851,22 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
 
     <hr>
 
-    <!-- LISTE DES ARRIVAGES RÉCENTS -->
+    <!-- LISTE DES ARRIVAGES RÉCENTS - MODIFIÉE POUR INCLURE LES NOUVELLES COLONNES -->
     <div class="row-fluid">
       <div class="span12">
         <div class="widget-box">
           <div class="widget-title">
             <span class="icon"><i class="icon-th"></i></span>
-            <h5>Arrivages Récents de Produits</h5>
+            <h5>📋 Arrivages Récents de Produits</h5>
           </div>
           <div class="widget-content nopadding">
-            <table class="table table-bordered data-table">
+            <table class="table table-bordered data-table arrivals-table">
               <thead>
                 <tr>
                   <th>#</th>
                   <th>Date d'Arrivage</th>
+                  <th>Date de Livraison</th>
+                  <th>Bon de Livraison</th>
                   <th>Produit</th>
                   <th>Fournisseur</th>
                   <th>Qté</th>
@@ -755,6 +886,18 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
                   <tr>
                     <td><?php echo $cnt; ?></td>
                     <td><?php echo $row['ArrivalDate']; ?></td>
+                    <td class="delivery-date-cell">
+                      <?php echo $row['DeliveryDate'] ? $row['DeliveryDate'] : '<span class="delivery-missing">-</span>'; ?>
+                    </td>
+                    <td class="delivery-note-cell">
+                      <?php 
+                      if ($row['DeliveryNote']) {
+                        echo $row['DeliveryNote'] . '<span class="delivery-badge">✓</span>';
+                      } else {
+                        echo '<span class="delivery-missing">-</span>';
+                      }
+                      ?>
+                    </td>
                     <td><?php echo $row['ProductName']; ?></td>
                     <td><?php echo $row['SupplierName']; ?></td>
                     <td><?php echo $qty; ?></td>
@@ -787,6 +930,43 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
 <script src="js/matrix.js"></script>
 <script src="js/matrix.tables.js"></script>
 <script>
+// NOUVEAUX SCRIPTS POUR LES FONCTIONNALITÉS DE LIVRAISON
+
+// Fonction pour générer automatiquement un numéro de bon de livraison
+function generateDeliveryNote() {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const time = String(today.getHours()).padStart(2, '0') + String(today.getMinutes()).padStart(2, '0');
+    
+    return `BL${year}${month}${day}-${time}`;
+}
+
+// Fonction pour auto-compléter le bon de livraison
+function autoCompleteDeliveryNote() {
+    const deliveryNoteInputs = document.querySelectorAll('input[name="deliverynote"]');
+    
+    deliveryNoteInputs.forEach(function(input) {
+        // Ajouter un bouton pour générer automatiquement
+        const autoBtn = document.createElement('button');
+        autoBtn.type = 'button';
+        autoBtn.className = 'btn btn-mini btn-info';
+        autoBtn.innerHTML = '✨ Auto';
+        autoBtn.title = 'Générer un numéro automatique';
+        autoBtn.style.marginLeft = '5px';
+        
+        autoBtn.addEventListener('click', function() {
+            input.value = generateDeliveryNote();
+        });
+        
+        // Insérer le bouton après l'input
+        if (input.parentNode) {
+            input.parentNode.appendChild(autoBtn);
+        }
+    });
+}
+
 // Fonction pour remplir le prix personnalisé avec le prix actuel
 function fillCustomPrice() {
   const productSelect = document.getElementById('productSelect');
@@ -849,6 +1029,51 @@ function updateCartTotal() {
   });
 }
 
+// Fonction pour synchroniser les dates de livraison avec les dates d'arrivage
+function syncDeliveryDate() {
+    const arrivalDateInputs = document.querySelectorAll('input[name="arrivaldate"]');
+    const deliveryDateInputs = document.querySelectorAll('input[name="deliverydate"]');
+    
+    arrivalDateInputs.forEach(function(arrivalInput, index) {
+        arrivalInput.addEventListener('change', function() {
+            if (deliveryDateInputs[index] && !deliveryDateInputs[index].value) {
+                deliveryDateInputs[index].value = this.value;
+            }
+        });
+    });
+}
+
+// Fonction pour valider les dates
+function validateDeliveryDates() {
+    const forms = document.querySelectorAll('form');
+    
+    forms.forEach(function(form) {
+        form.addEventListener('submit', function(e) {
+            const arrivalDate = form.querySelector('input[name="arrivaldate"]');
+            const deliveryDate = form.querySelector('input[name="deliverydate"]');
+            
+            if (arrivalDate && deliveryDate && arrivalDate.value && deliveryDate.value) {
+                const arrival = new Date(arrivalDate.value);
+                const delivery = new Date(deliveryDate.value);
+                
+                if (delivery > arrival) {
+                    const daysDiff = Math.ceil((delivery - arrival) / (1000 * 60 * 60 * 24));
+                    if (daysDiff > 30) {
+                        const confirmed = confirm(
+                            `Attention: La date de livraison est ${daysDiff} jours après la date d'arrivage. ` +
+                            'Êtes-vous sûr de ces dates?'
+                        );
+                        if (!confirmed) {
+                            e.preventDefault();
+                            return false;
+                        }
+                    }
+                }
+            }
+        });
+    });
+}
+
 // Listen for changes
 document.addEventListener('DOMContentLoaded', function() {
   // Formulaire unique
@@ -877,6 +1102,20 @@ document.addEventListener('DOMContentLoaded', function() {
   
   cartQuantityInputs.forEach(function(input) {
     input.addEventListener('input', updateCartTotal);
+  });
+  
+  // NOUVELLES FONCTIONNALITÉS
+  syncDeliveryDate();
+  autoCompleteDeliveryNote();
+  validateDeliveryDates();
+  
+  // Synchroniser les dates initiales
+  const arrivalInputs = document.querySelectorAll('input[name="arrivaldate"]');
+  arrivalInputs.forEach(function(input) {
+    if (input.value) {
+      const event = new Event('change');
+      input.dispatchEvent(event);
+    }
   });
 });
 </script>
