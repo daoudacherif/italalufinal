@@ -966,7 +966,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                 </a>
                 <a href="dettecart.php" class="current">Panier à Terme avec Plafonds de Crédit</a>
             </div>
-            <h1>🛒 Panier à Terme avec Système d'Échéances + 💳 Plafonds de Crédit</h1>
+           
         </div>
   
         <div class="container-fluid">
@@ -1029,14 +1029,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                 </div>
             </div>
             
-            <!-- Lien vers la gestion des clients -->
-            <div class="manage-customers-link">
-                <i class="icon-user"></i>
-                <a href="add_customer_master.php" target="_blank">
-                    💳 Gérer le Répertoire Client & Plafonds de Crédit (Ajouter, Modifier, Supprimer)
-                </a>
-                - Ouvrir dans un nouvel onglet
-            </div>
+           
             
             <!-- Indicateur de panier utilisateur -->
             <div class="user-cart-indicator">
