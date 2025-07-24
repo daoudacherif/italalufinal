@@ -72,8 +72,8 @@ try {
         <li><a href="return.php">Retour</a></li>
         <li><a href="transact.php">Transactions</a></li>
          <?php if($username != 'saler'): ?>
-        <li><a href="facture.php">Factures</a></li>
-        <li><a href="admin_invoices.php">Factures par Admin</a></li>
+        
+        <li><a href="admin_invoices.php">gestion utilisateur</a></li>
         <?php endif; ?>
       </ul>
     </li>
