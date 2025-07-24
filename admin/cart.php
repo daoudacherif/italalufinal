@@ -294,6 +294,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
         
         tr.stock-error {
             background-color: #f2dede !important;
+            border-left: 3px solid #d9534f !important;
         }
         
         .global-warning {
@@ -336,6 +337,41 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
         .user-cart-indicator i {
             margin-right: 5px;
             color: #27a9e3;
+        }
+        
+        /* Amélioration des boutons de suppression */
+        .btn-danger {
+            background-color: #da4f49;
+            background-image: linear-gradient(to bottom, #ee5f5b, #bd362f);
+            border: 1px solid #bd362f;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background-color: #bd362f;
+            color: white;
+        }
+        
+        .action-column {
+            min-width: 120px;
+            text-align: center;
+        }
+        
+        .delete-btn {
+            background-color: #d9534f;
+            border: 1px solid #d43f3a;
+            color: white;
+            padding: 4px 12px;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .delete-btn:hover {
+            background-color: #c9302c;
+            color: white;
+            text-decoration: none;
         }
     </style>
 </head>
@@ -586,7 +622,7 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                         <th>Prix de base</th>
                                         <th>Prix appliqué</th>
                                         <th>Total</th>
-                                        <th>Action</th>
+                                        <th class="action-column">Action</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -628,8 +664,8 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                                 $stockStatus = '<span class="stock-warning">INSUFFISANT</span>';
                                             }
                                             
-                                            // Déterminer si le prix a été modifié par rapport au prix de base
-                                            $prixModifie = ($ppu != $basePrice);
+                                            // Déterminer si le prix a été modifié par rapport au prix de base (CORRECTION)
+                                            $prixModifie = ($basePrice > 0 && $ppu != $basePrice);
                                             ?>
                                             <tr <?php echo $rowClass; ?>>
                                                 <td><?php echo $cnt; ?></td>
@@ -651,17 +687,26 @@ while ($product = mysqli_fetch_assoc($cartProducts)) {
                                                     <?php echo number_format($ppu, 2); ?> GNF
                                                     <?php if ($prixModifie): ?>
                                                         <?php 
-                                                        $variation = (($ppu / $basePrice) - 1) * 100;
-                                                        $symbole = $variation >= 0 ? '+' : '';
-                                                        echo '<br><small class="text-muted">(' . $symbole . number_format($variation, 1) . '%)</small>'; 
+                                                        // CORRECTION: Vérification pour éviter la division par zéro
+                                                        if ($basePrice > 0) {
+                                                            $variation = (($ppu / $basePrice) - 1) * 100;
+                                                            $symbole = $variation >= 0 ? '+' : '';
+                                                            echo '<br><small class="text-muted">(' . $symbole . number_format($variation, 1) . '%)</small>'; 
+                                                        } else {
+                                                            // Si le prix de base est 0, afficher un message approprié
+                                                            echo '<br><small class="text-muted">(Prix personnalisé)</small>';
+                                                        }
                                                         ?>
                                                     <?php endif; ?>
                                                 </td>
                                                 <td><?php echo number_format($lineTotal, 2); ?> GNF</td>
-                                                <td>
-                                                    <a href="cart.php?delid=<?php echo $row['cid']; ?>"
-                                                       onclick="return confirm('Voulez-vous vraiment retirer cet article?');">
-                                                        <i class="icon-trash"></i>
+                                                <td class="action-column">
+                                                    <!-- CORRECTION: Bouton de suppression amélioré -->
+                                                    <a href="cart.php?delid=<?php echo $row['cid']; ?>" 
+                                                       class="delete-btn"
+                                                       onclick="return confirm('Voulez-vous vraiment retirer cet article du panier ?');"
+                                                       title="Supprimer cet article">
+                                                        ✖ Supprimer
                                                     </a>
                                                 </td>
                                             </tr>
