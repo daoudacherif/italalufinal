@@ -86,9 +86,9 @@
         <div class="container mx-auto px-4 py-4 flex justify-between items-center">
             <div class="flex items-center">
                 <div class="w-12 h-12 rounded-full bg-primary flex items-center justify-center text-white font-bold text-xl mr-3 aluminum-shine">
-                    <span class="relative z-10">GNS</span>
+                    <span class="relative z-10">IA</span>
                 </div>
-                <h1 class="text-2xl font-bold text-light">GNS GROUPES</h1>
+                <h1 class="text-2xl font-bold text-light">ITALALU GROUPES</h1>
             </div>
             <div class="hidden md:flex space-x-6 items-center">
                 <a href="#accueil" class="text-light hover:text-primary transition">Accueil</a>
