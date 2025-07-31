@@ -1,1086 +1,1071 @@
 <?php
 session_start();
-// Activer le rapport d'erreurs pour le débogage
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 include('includes/dbconnection.php');
 
-// Vérifier la connexion
 if (!$con) {
     die("Erreur de connexion à la base de données: " . mysqli_connect_error());
 }
 
-// Vérification de session
 if (strlen($_SESSION['imsaid']) == 0) {
     header('location:logout.php');
     exit;
 }
 
-// Obtenir la structure de tblproducts pour vérifier le nom exact de la colonne
-$tableCheck = mysqli_query($con, "DESCRIBE tblproducts");
-$stockColumnName = "Stock"; // Par défaut
-$stockColumnFound = false;
+// ====================================================================
+// FONCTIONS UTILITAIRES POUR IMPORTATIONS
+// ====================================================================
 
-if ($tableCheck) {
-    while ($col = mysqli_fetch_assoc($tableCheck)) {
-        // Rechercher la colonne de stock (peut avoir un nom différent ou une casse différente)
-        if (strtolower($col['Field']) === 'stock') {
-            $stockColumnName = $col['Field']; // Utiliser le nom exact avec la casse correcte
-            $stockColumnFound = true;
-            break;
-        }
-    }
+function updateImportTotals($con, $importId) {
+    $sql = "UPDATE tblimportations 
+            SET TotalFees = (SELECT COALESCE(SUM(Amount), 0) FROM tblimportfees WHERE ImportationID = $importId),
+                TotalCostGNF = TotalValueGNF + (SELECT COALESCE(SUM(Amount), 0) FROM tblimportfees WHERE ImportationID = $importId)
+            WHERE ID = $importId";
+    return mysqli_query($con, $sql);
 }
 
-// NOUVELLE FONCTION : Mise à jour automatique du prix d'achat moyen
-function updateProductCostPrice($con, $productId) {
-    // Calculer le prix d'achat moyen pondéré des 5 derniers arrivages
-    $sql = "
-        SELECT 
-            AVG(Cost / Quantity) as avgCost,
-            MAX(ArrivalDate) as lastUpdate
-        FROM (
-            SELECT Cost, Quantity, ArrivalDate
-            FROM tblproductarrivals 
-            WHERE ProductID = $productId 
-            AND Quantity > 0 
-            AND Cost > 0
-            ORDER BY ArrivalDate DESC 
-            LIMIT 5
-        ) recent_arrivals
-    ";
+function calculateProductCostPrice($con, $arrivalId) {
+    $sql = "SELECT pa.*, i.ExchangeRate 
+            FROM tblproductarrivals pa 
+            LEFT JOIN tblimportations i ON i.ID = pa.ImportationID 
+            WHERE pa.ID = $arrivalId";
     
     $result = mysqli_query($con, $sql);
     if ($result && mysqli_num_rows($result) > 0) {
         $data = mysqli_fetch_assoc($result);
-        $avgCost = $data['avgCost'] ? $data['avgCost'] : 0;
         
-        // Mettre à jour le produit
-        $updateSql = "
-            UPDATE tblproducts 
-            SET 
-                CostPrice = $avgCost,
-                LastCostUpdate = NOW()
-            WHERE ID = $productId
-        ";
+        $unitPriceUSD = floatval($data['UnitPriceUSD']);
+        $allocatedFees = floatval($data['AllocatedFees']);
+        $quantity = floatval($data['Quantity']);
+        $exchangeRate = floatval($data['ExchangeRate']);
         
+        // Prix de revient = (Prix USD * Taux) + (Frais alloués / Quantité)
+        $unitCostPriceGNF = ($unitPriceUSD * $exchangeRate) + ($allocatedFees / $quantity);
+        
+        // Mettre à jour l'arrivage
+        $updateSql = "UPDATE tblproductarrivals 
+                      SET UnitCostPrice = $unitCostPriceGNF 
+                      WHERE ID = $arrivalId";
         mysqli_query($con, $updateSql);
-        return $avgCost;
+        
+        return $unitCostPriceGNF;
     }
     return 0;
 }
 
-// 1) Handle arrival submission (multiple products)
-if (isset($_POST['submit'])) {
-    $arrivalDate = $_POST['arrivaldate'];
-    $deliveryDate = $_POST['deliverydate']; // NOUVEAU
-    $deliveryNote = mysqli_real_escape_string($con, $_POST['deliverynote']); // NOUVEAU
-    $supplierID = intval($_POST['supplierid']);
+// ====================================================================
+// GESTION DES FORMULAIRES
+// ====================================================================
+
+// 1) CRÉER UN NOUVEAU DOSSIER D'IMPORTATION
+if (isset($_POST['create_import'])) {
+    $importRef = mysqli_real_escape_string($con, $_POST['import_ref']);
+    $factureNumber = mysqli_real_escape_string($con, $_POST['facture_number']);
+    $blNumber = mysqli_real_escape_string($con, $_POST['bl_number']);
+    $containerNumber = mysqli_real_escape_string($con, $_POST['container_number']);
+    $supplierID = intval($_POST['supplier_id']);
+    $importDate = $_POST['import_date'];
+    $totalValueUSD = floatval($_POST['total_value_usd']);
+    $exchangeRate = floatval($_POST['exchange_rate']);
+    $description = mysqli_real_escape_string($con, $_POST['description']);
     
-    // Check if we have products to process
-    if(isset($_POST['productid']) && is_array($_POST['productid'])) {
-        $productIDs = $_POST['productid'];
-        $quantities = $_POST['quantity'];
-        $customPrices = $_POST['customprice']; // NOUVEAU : prix personnalisés
-        $comments = isset($_POST['comments']) ? $_POST['comments'] : array();
-        
-        $successCount = 0;
-        $errorCount = 0;
-        $errorDetails = array();
-        
-        // Process each product
-        foreach($productIDs as $index => $productID) {
-            $productID = intval($productID);
-            $quantity = intval($quantities[$index]);
-            $customPrice = floatval($customPrices[$index]); // NOUVEAU : prix personnalisé
-            $comment = isset($comments[$index]) ? mysqli_real_escape_string($con, $comments[$index]) : '';
-            
-            // Validate data
-            if ($productID <= 0 || $quantity <= 0 || $customPrice <= 0) {
-                $errorCount++;
-                $errorDetails[] = "Produit ID $productID invalide, quantité nulle ou prix personnalisé invalide";
-                continue;
-            }
-            
-            // Get current stock
-            $stockQ = mysqli_query($con, "SELECT $stockColumnName FROM tblproducts WHERE ID='$productID' LIMIT 1");
-            if (!$stockQ) {
-                $errorCount++;
-                $errorDetails[] = "Erreur de requête: " . mysqli_error($con);
-                continue;
-            }
-            
-            if (mysqli_num_rows($stockQ) == 0) {
-                $errorCount++;
-                $errorDetails[] = "Produit ID $productID non trouvé";
-                continue;
-            }
-            
-            $stockR = mysqli_fetch_assoc($stockQ);
-            $currentStock = isset($stockR[$stockColumnName]) ? intval($stockR[$stockColumnName]) : 0;
-            
-            // Calculate total cost avec prix personnalisé
-            $cost = $customPrice * $quantity;
-            
-            // Insert into tblproductarrivals avec les nouveaux champs
-            $sqlInsert = "
-              INSERT INTO tblproductarrivals(ProductID, SupplierID, ArrivalDate, DeliveryDate, DeliveryNote, Quantity, Cost, Comments)
-              VALUES('$productID', '$supplierID', '$arrivalDate', '$deliveryDate', '$deliveryNote', '$quantity', '$cost', '$comment')
-            ";
-            $queryInsert = mysqli_query($con, $sqlInsert);
-            
-            if ($queryInsert) {
-                // Calcul du nouveau stock
-                $newStock = $currentStock + $quantity;
-                
-                // Mise à jour du stock seulement
-                $sqlUpdate = "UPDATE tblproducts SET $stockColumnName = $newStock WHERE ID=$productID";
-                $updateResult = mysqli_query($con, $sqlUpdate);
-                
-                if ($updateResult) {
-                    if (mysqli_affected_rows($con) > 0) {
-                        // NOUVEAU : Mise à jour automatique du prix d'achat
-                        $newCostPrice = updateProductCostPrice($con, $productID);
-                        $successCount++;
-                    } else {
-                        $errorCount++;
-                        $errorDetails[] = "Produit ID $productID trouvé mais aucun stock mis à jour. Stock actuel: $currentStock";
-                    }
-                } else {
-                    $errorCount++;
-                    $errorDetails[] = "Erreur mise à jour stock pour ID $productID: " . mysqli_error($con);
-                }
-            } else {
-                $errorCount++;
-                $errorDetails[] = "Erreur insertion arrivage pour ID $productID: " . mysqli_error($con);
-            }
-        }
-        
-        // Display result message with details
-        if ($successCount > 0) {
-            echo "<script>alert('$successCount arrivages de produits enregistrés avec succès! " . 
-                  ($errorCount > 0 ? "$errorCount avec erreurs." : "") . "');</script>";
-        } else {
-            $errorMsg = "Erreur lors de l\\'enregistrement des arrivages de produits!\\n" . implode("\\n", $errorDetails);
-            echo "<script>alert('$errorMsg');</script>";
-        }
+    $totalValueGNF = $totalValueUSD * $exchangeRate;
+    
+    $sql = "INSERT INTO tblimportations (ImportRef, FactureNumber, BLNumber, ContainerNumber, SupplierID, ImportDate, TotalValueUSD, ExchangeRate, TotalValueGNF, Description) 
+            VALUES ('$importRef', '$factureNumber', '$blNumber', '$containerNumber', $supplierID, '$importDate', $totalValueUSD, $exchangeRate, $totalValueGNF, '$description')";
+    
+    if (mysqli_query($con, $sql)) {
+        $importId = mysqli_insert_id($con);
+        echo "<script>alert('Dossier d\\'importation créé avec succès! ID: $importId');</script>";
+        $_SESSION['current_import_id'] = $importId;
     } else {
-        echo "<script>alert('Aucun produit sélectionné!');</script>";
+        echo "<script>alert('Erreur lors de la création: " . mysqli_error($con) . "');</script>";
     }
     
     echo "<script>window.location.href='arrival.php'</script>";
     exit;
 }
 
-// FIX: Add handling for the single product form
-if (isset($_POST['submit_single'])) {
-    $arrivalDate = $_POST['arrivaldate'];
-    $deliveryDate = $_POST['deliverydate']; // NOUVEAU
-    $deliveryNote = mysqli_real_escape_string($con, $_POST['deliverynote']); // NOUVEAU
-    $supplierID = intval($_POST['supplierid']);
-    $productID = intval($_POST['productid']);
+// 2) AJOUTER DES FRAIS À UNE IMPORTATION
+if (isset($_POST['add_import_fees'])) {
+    $importId = intval($_POST['import_id']);
+    $feeTypes = $_POST['fee_type_id'] ?? [];
+    $amounts = $_POST['fee_amount'] ?? [];
+    $payedByClient = $_POST['payed_by_client'] ?? [];
+    $comments = $_POST['fee_comments'] ?? [];
+    
+    $successCount = 0;
+    foreach ($feeTypes as $index => $feeTypeId) {
+        if ($feeTypeId > 0 && $amounts[$index] > 0) {
+            $amount = floatval($amounts[$index]);
+            $payedBy = isset($payedByClient[$index]) ? 1 : 0;
+            $comment = mysqli_real_escape_string($con, $comments[$index] ?? '');
+            
+            $sql = "INSERT INTO tblimportfees (ImportationID, FeeTypeID, Amount, PayedByClient, Comments) 
+                    VALUES ($importId, $feeTypeId, $amount, $payedBy, '$comment')";
+            
+            if (mysqli_query($con, $sql)) {
+                $successCount++;
+            }
+        }
+    }
+    
+    if ($successCount > 0) {
+        updateImportTotals($con, $importId);
+        echo "<script>alert('$successCount frais ajoutés avec succès!');</script>";
+    } else {
+        echo "<script>alert('Aucun frais valide à ajouter!');</script>";
+    }
+    
+    echo "<script>window.location.href='arrival.php'</script>";
+    exit;
+}
+
+// 3) AJOUTER PRODUIT À UNE IMPORTATION AVEC CALCUL DE PRIX
+if (isset($_POST['add_import_product'])) {
+    $importId = intval($_POST['import_id']);
+    $productId = intval($_POST['product_id']);
     $quantity = intval($_POST['quantity']);
-    $customPrice = floatval($_POST['customprice']); // NOUVEAU : prix personnalisé
-    $comment = mysqli_real_escape_string($con, $_POST['comments'] ?? '');
+    $unitPriceUSD = floatval($_POST['unit_price_usd']);
+    $allocatedFees = floatval($_POST['allocated_fees']);
+    $suggestedMargin = floatval($_POST['suggested_margin']);
+    $arrivalDate = $_POST['arrival_date'];
+    $deliveryDate = $_POST['delivery_date'] ?? null;
+    $deliveryNote = mysqli_real_escape_string($con, $_POST['delivery_note'] ?? '');
+    $comments = mysqli_real_escape_string($con, $_POST['comments'] ?? '');
     
-    // Calculate cost avec prix personnalisé
-    $cost = $customPrice * $quantity;
-    
-    // Validate data
-    if ($productID <= 0 || $quantity <= 0 || $supplierID <= 0 || $customPrice <= 0) {
-        echo "<script>alert('Données invalides! Vérifiez le prix personnalisé.');</script>";
+    // Obtenir le taux de change de l'importation
+    $importQuery = mysqli_query($con, "SELECT ExchangeRate, SupplierID FROM tblimportations WHERE ID = $importId");
+    if (!$importQuery || mysqli_num_rows($importQuery) == 0) {
+        echo "<script>alert('Importation non trouvée!');</script>";
         echo "<script>window.location.href='arrival.php'</script>";
         exit;
     }
     
-    // Get current stock
-    $stockQuery = mysqli_query($con, "SELECT $stockColumnName FROM tblproducts WHERE ID=$productID LIMIT 1");
-    if (!$stockQuery || mysqli_num_rows($stockQuery) == 0) {
-        echo "<script>alert('Produit non trouvé!');</script>";
-        echo "<script>window.location.href='arrival.php'</script>";
-        exit;
-    }
+    $importData = mysqli_fetch_assoc($importQuery);
+    $exchangeRate = floatval($importData['ExchangeRate']);
+    $supplierId = intval($importData['SupplierID']);
     
-    $stockRow = mysqli_fetch_assoc($stockQuery);
-    $currentStock = isset($stockRow[$stockColumnName]) ? intval($stockRow[$stockColumnName]) : 0;
-    $newStock = $currentStock + $quantity;
+    // Calculer les coûts
+    $totalCostUSD = $unitPriceUSD * $quantity;
+    $totalCostGNF = $totalCostUSD * $exchangeRate;
+    $unitCostPriceGNF = ($unitPriceUSD * $exchangeRate) + ($allocatedFees / $quantity);
+    $suggestedSalePrice = $unitCostPriceGNF * (1 + ($suggestedMargin / 100));
     
-    // Insert into tblproductarrivals avec les nouveaux champs
-    $sqlInsert = "
-      INSERT INTO tblproductarrivals(ProductID, SupplierID, ArrivalDate, DeliveryDate, DeliveryNote, Quantity, Cost, Comments)
-      VALUES('$productID', '$supplierID', '$arrivalDate', '$deliveryDate', '$deliveryNote', '$quantity', '$cost', '$comment')
-    ";
-    $queryInsert = mysqli_query($con, $sqlInsert);
+    // Insérer dans tblproductarrivals
+    $sql = "INSERT INTO tblproductarrivals (
+                ProductID, SupplierID, ImportationID, ArrivalDate, DeliveryDate, DeliveryNote, 
+                Quantity, Cost, UnitPriceUSD, AllocatedFees, UnitCostPrice, 
+                SuggestedMargin, SuggestedSalePrice, Comments
+            ) VALUES (
+                $productId, $supplierId, $importId, '$arrivalDate', " . 
+                ($deliveryDate ? "'$deliveryDate'" : "NULL") . ", '$deliveryNote', 
+                $quantity, $totalCostGNF, $unitPriceUSD, $allocatedFees, $unitCostPriceGNF,
+                $suggestedMargin, $suggestedSalePrice, '$comments'
+            )";
     
-    if ($queryInsert) {
-        // Update product stock with direct value
-        $sqlUpdate = "UPDATE tblproducts SET $stockColumnName = $newStock WHERE ID=$productID";
-        $updateResult = mysqli_query($con, $sqlUpdate);
+    if (mysqli_query($con, $sql)) {
+        $arrivalId = mysqli_insert_id($con);
         
-        if ($updateResult) {
-            // Check if any rows were actually updated
-            if (mysqli_affected_rows($con) > 0) {
-                // NOUVEAU : Mise à jour automatique du prix d'achat
-                $newCostPrice = updateProductCostPrice($con, $productID);
-                
-                echo "<script>alert('Arrivage enregistré avec succès! Stock: $currentStock -> $newStock. Coût: $cost. Nouveau prix d\\'achat moyen: " . number_format($newCostPrice, 2) . ". Bon: $deliveryNote');</script>";
-            } else {
-                echo "<script>alert('Produit trouvé mais stock non modifié. Vérifiez que l\\'ID du produit est correct.');</script>";
-            }
-        } else {
-            echo "<script>alert('Erreur lors de la mise à jour du stock: " . mysqli_error($con) . "');</script>";
+        // Mettre à jour le stock
+        $stockQuery = mysqli_query($con, "SELECT Stock FROM tblproducts WHERE ID = $productId");
+        if ($stockQuery && mysqli_num_rows($stockQuery) > 0) {
+            $stockData = mysqli_fetch_assoc($stockQuery);
+            $currentStock = intval($stockData['Stock']);
+            $newStock = $currentStock + $quantity;
+            
+            $updateStockSql = "UPDATE tblproducts SET Stock = $newStock WHERE ID = $productId";
+            mysqli_query($con, $updateStockSql);
         }
+        
+        echo "<script>alert('Produit ajouté à l\\'importation avec succès!\\nPrix de revient: " . number_format($unitCostPriceGNF, 2) . " GNF\\nPrix de vente suggéré: " . number_format($suggestedSalePrice, 2) . " GNF');</script>";
     } else {
-        echo "<script>alert('Erreur lors de l\\'enregistrement de l\\'arrivage: " . mysqli_error($con) . "');</script>";
+        echo "<script>alert('Erreur lors de l\\'ajout: " . mysqli_error($con) . "');</script>";
     }
     
     echo "<script>window.location.href='arrival.php'</script>";
     exit;
 }
 
-// 2) Handle adding product to temporary arrival list
-if (isset($_POST['addtoarrival'])) {
-    $productId = intval($_POST['productid']);
-    $quantity = max(1, intval($_POST['quantity']));
-    $customPrice = floatval($_POST['customprice']); // NOUVEAU : prix personnalisé
+// 4) APPLIQUER LES PRIX DE VENTE AUX PRODUITS
+if (isset($_POST['apply_sale_prices'])) {
+    $arrivalIds = $_POST['arrival_id'] ?? [];
+    $salePrices = $_POST['sale_price'] ?? [];
+    $targetMargins = $_POST['target_margin'] ?? [];
     
-    // Check if valid product
-    if ($productId > 0 && $customPrice > 0) {
-        // Get product info
-        $prodInfo = mysqli_query($con, "SELECT ProductName, Price FROM tblproducts WHERE ID='$productId' LIMIT 1");
-        if (mysqli_num_rows($prodInfo) > 0) {
-            $productData = mysqli_fetch_assoc($prodInfo);
-            
-            // Initialize temp array if not exists
-            if (!isset($_SESSION['temp_arrivals'])) {
-                $_SESSION['temp_arrivals'] = array();
-            }
-            
-            // Add to temp storage or update quantity if exists
-            $found = false;
-            foreach ($_SESSION['temp_arrivals'] as $key => $item) {
-                if ($item['productid'] == $productId) {
-                    $_SESSION['temp_arrivals'][$key]['quantity'] += $quantity;
-                    $_SESSION['temp_arrivals'][$key]['customprice'] = $customPrice; // Mettre à jour le prix personnalisé
-                    $found = true;
-                    break;
+    $successCount = 0;
+    foreach ($arrivalIds as $index => $arrivalId) {
+        $arrivalId = intval($arrivalId);
+        $salePrice = floatval($salePrices[$index]);
+        $targetMargin = floatval($targetMargins[$index]);
+        
+        if ($arrivalId > 0 && $salePrice > 0) {
+            // Obtenir les données de l'arrivage
+            $arrivalQuery = mysqli_query($con, "SELECT ProductID, UnitCostPrice FROM tblproductarrivals WHERE ID = $arrivalId");
+            if ($arrivalQuery && mysqli_num_rows($arrivalQuery) > 0) {
+                $arrivalData = mysqli_fetch_assoc($arrivalQuery);
+                $productId = intval($arrivalData['ProductID']);
+                $unitCostPrice = floatval($arrivalData['UnitCostPrice']);
+                
+                // Mettre à jour le produit avec le nouveau prix de vente
+                $updateProductSql = "UPDATE tblproducts 
+                                   SET Price = $salePrice, 
+                                       CostPrice = $unitCostPrice,
+                                       TargetMargin = $targetMargin,
+                                       LastCostUpdate = NOW()
+                                   WHERE ID = $productId";
+                
+                if (mysqli_query($con, $updateProductSql)) {
+                    // Marquer l'arrivage comme appliqué
+                    $updateArrivalSql = "UPDATE tblproductarrivals 
+                                       SET AppliedToProduct = 1, 
+                                           SuggestedSalePrice = $salePrice,
+                                           SuggestedMargin = $targetMargin
+                                       WHERE ID = $arrivalId";
+                    mysqli_query($con, $updateArrivalSql);
+                    
+                    $successCount++;
                 }
             }
-            
-            if (!$found) {
-                $_SESSION['temp_arrivals'][] = array(
-                    'productid' => $productId,
-                    'productname' => $productData['ProductName'],
-                    'unitprice' => $productData['Price'], // Prix original pour référence
-                    'customprice' => $customPrice, // NOUVEAU : prix personnalisé
-                    'quantity' => $quantity,
-                    'comments' => ''
-                );
-            }
-            
-            echo "<script>alert('Produit ajouté à la liste d\'arrivage avec prix personnalisé!');</script>";
         }
+    }
+    
+    if ($successCount > 0) {
+        echo "<script>alert('$successCount prix de vente appliqués avec succès!');</script>";
     } else {
-        echo "<script>alert('Produit invalide ou prix personnalisé invalide!');</script>";
+        echo "<script>alert('Aucun prix appliqué!');</script>";
     }
     
     echo "<script>window.location.href='arrival.php'</script>";
     exit;
 }
 
-// 3) Remove from temp arrival list
-if (isset($_GET['delid'])) {
-    $delid = intval($_GET['delid']);
-    
-    if (isset($_SESSION['temp_arrivals']) && isset($_SESSION['temp_arrivals'][$delid])) {
-        // Remove the item
-        unset($_SESSION['temp_arrivals'][$delid]);
-        // Re-index array
-        $_SESSION['temp_arrivals'] = array_values($_SESSION['temp_arrivals']);
-        
-        echo "<script>alert('Produit retiré de la liste d\'arrivage!');</script>";
-        echo "<script>window.location.href='arrival.php'</script>";
-        exit;
-    }
-}
-
-// 4) Clear all temp arrivals
-if (isset($_GET['clear'])) {
-    unset($_SESSION['temp_arrivals']);
-    echo "<script>alert('Liste d\'arrivage vidée!');</script>";
+// 5) SÉLECTIONNER UNE IMPORTATION POUR TRAVAILLER DESSUS
+if (isset($_GET['select_import'])) {
+    $_SESSION['current_import_id'] = intval($_GET['select_import']);
     echo "<script>window.location.href='arrival.php'</script>";
     exit;
 }
 
-// Get product names for datalist
-$productNamesQuery = mysqli_query($con, "SELECT DISTINCT ProductName FROM tblproducts ORDER BY ProductName ASC");
-$productNames = array();
-if ($productNamesQuery) {
-    while ($row = mysqli_fetch_assoc($productNamesQuery)) {
-        $productNames[] = $row['ProductName'];
+// Obtenir l'importation courante
+$currentImportId = $_SESSION['current_import_id'] ?? 0;
+$currentImport = null;
+if ($currentImportId > 0) {
+    $importQuery = mysqli_query($con, "
+        SELECT i.*, s.SupplierName 
+        FROM tblimportations i 
+        LEFT JOIN tblsupplier s ON s.ID = i.SupplierID 
+        WHERE i.ID = $currentImportId
+    ");
+    if ($importQuery && mysqli_num_rows($importQuery) > 0) {
+        $currentImport = mysqli_fetch_assoc($importQuery);
     }
 }
 
-// 5) Liste des arrivages récents - MODIFIÉ pour inclure les nouveaux champs
-$sqlArrivals = "
-  SELECT a.ID as arrivalID,
-         a.ArrivalDate,
-         a.DeliveryDate,
-         a.DeliveryNote,
-         a.Quantity,
-         a.Cost,
-         a.Comments,
-         p.ProductName,
-         p.Price as UnitPrice,
-         s.SupplierName
-  FROM tblproductarrivals a
-  LEFT JOIN tblproducts p ON p.ID = a.ProductID
-  LEFT JOIN tblsupplier s ON s.ID = a.SupplierID
-  ORDER BY a.ID DESC
-  LIMIT 50
-";
-$resArrivals = mysqli_query($con, $sqlArrivals);
+// Obtenir les types de frais
+$feeTypesQuery = mysqli_query($con, "SELECT * FROM tblimportfees_types WHERE IsActive = 1 ORDER BY FeeName");
+
+// Obtenir les importations récentes
+$recentImportsQuery = mysqli_query($con, "
+    SELECT i.*, s.SupplierName, 
+           COUNT(pa.ID) as ProductCount,
+           SUM(pa.Quantity) as TotalQuantity
+    FROM tblimportations i 
+    LEFT JOIN tblsupplier s ON s.ID = i.SupplierID 
+    LEFT JOIN tblproductarrivals pa ON pa.ImportationID = i.ID
+    GROUP BY i.ID 
+    ORDER BY i.ImportDate DESC, i.ID DESC 
+    LIMIT 10
+");
+
+// Obtenir les fournisseurs
+$suppliersQuery = mysqli_query($con, "SELECT ID, SupplierName FROM tblsupplier ORDER BY SupplierName");
+
+// Obtenir les produits pour la sélection
+$productsQuery = mysqli_query($con, "SELECT ID, ProductName, Price FROM tblproducts WHERE Status = 1 ORDER BY ProductName");
 ?>
+
 <!DOCTYPE html>
 <html lang="fr">
-<style>
-  .control-label {
-    font-size: 20px;
-    font-weight: bolder;
-    color: black;  
-  }
-  .stock-status {
-    display: inline-block;
-    padding: 2px 5px;
-    font-size: 11px;
-    border-radius: 3px;
-  }
-  .stock-ok {
-    background-color: #dff0d8;
-    color: #3c763d;
-  }
-  .stock-warning {
-    background-color: #fcf8e3;
-    color: #8a6d3b;
-  }
-  .stock-danger {
-    background-color: #f2dede;
-    color: #a94442;
-  }
-  .custom-price {
-    background-color: #e8f4f8;
-    border: 1px solid #bee5eb;
-  }
-  .cart-total {
-    font-weight: bold;
-    color: #007bff;
-  }
-  
-  /* NOUVEAUX STYLES POUR LES CHAMPS DE LIVRAISON */
-  .delivery-fields {
-    background-color: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 5px;
-    padding: 15px;
-    margin: 10px 0;
-  }
-  
-  .delivery-note {
-    background-color: #e3f2fd;
-    border: 1px solid #2196f3;
-    border-radius: 3px;
-    font-family: 'Courier New', monospace;
-  }
-  
-  .delivery-date {
-    background-color: #fff3e0;
-    border: 1px solid #ff9800;
-    border-radius: 3px;
-  }
-  
-  .delivery-info {
-    font-size: 12px;
-    color: #6c757d;
-    margin-top: 5px;
-  }
-  
-  .delivery-badge {
-    display: inline-block;
-    padding: 2px 6px;
-    font-size: 10px;
-    background-color: #28a745;
-    color: white;
-    border-radius: 10px;
-    margin-left: 5px;
-  }
-  
-  .delivery-missing {
-    color: #dc3545;
-    font-style: italic;
-  }
-  
-  .arrivals-table {
-    font-size: 12px;
-  }
-  
-  .arrivals-table th {
-    background-color: #343a40;
-    color: white;
-    text-align: center;
-  }
-  
-  .arrivals-table .delivery-note-cell {
-    font-family: 'Courier New', monospace;
-    font-weight: bold;
-    color: #007bff;
-  }
-  
-  .arrivals-table .delivery-date-cell {
-    color: #28a745;
-    font-weight: 500;
-  }
-  
-  /* Responsive improvements */
-  @media (max-width: 768px) {
-    .delivery-fields .span4,
-    .delivery-fields .span6 {
-      width: 100%;
-      margin-bottom: 10px;
-    }
-  }
-</style>
 <head>
-    <title>Gestion de Stock | Arrivages de Produits</title>
+    <title>Gestion des Importations | ITALALU</title>
     <?php include_once('includes/cs.php'); ?>
     <?php include_once('includes/responsive.php'); ?>
+    <style>
+        .import-header {
+            background: linear-gradient(135deg, #2c3e50, #3498db);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .import-card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            background: #f8f9fa;
+        }
+        .fee-row {
+            background: #fff;
+            border: 1px solid #e9ecef;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+        .cost-breakdown {
+            background: #e8f4f8;
+            border: 1px solid #bee5eb;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+        }
+        .price-calculation {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .import-status-en_cours { color: #007bff; }
+        .import-status-termine { color: #28a745; }
+        .import-status-annule { color: #dc3545; }
+        .currency-usd { color: #2ecc71; font-weight: bold; }
+        .currency-gnf { color: #e74c3c; font-weight: bold; }
+        .tabs {
+            margin-bottom: 20px;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .nav-tabs {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            border-bottom: 2px solid #ddd;
+        }
+        .nav-tabs li {
+            display: inline-block;
+            margin-right: 5px;
+        }
+        .nav-tabs li a {
+            display: block;
+            padding: 10px 20px;
+            background: #f8f9fa;
+            color: #333;
+            text-decoration: none;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            border-radius: 5px 5px 0 0;
+        }
+        .nav-tabs li.active a {
+            background: #007bff;
+            color: white;
+        }
+    </style>
 </head>
 <body>
 <?php include_once('includes/header.php'); ?>
 <?php include_once('includes/sidebar.php'); ?>
 
 <div id="content">
-  <div id="content-header">
-    <div id="breadcrumb">
-      <a href="dashboard.php" class="tip-bottom"><i class="icon-home"></i> Accueil</a>
-      <a href="arrival.php" class="current">Arrivages de Produits</a>
-    </div>
-    <h1>🚚 Gérer les Arrivages de Produits (Entrée Stock + Prix Personnalisé + Bon de Livraison)</h1>
-  </div>
-
-  <div class="container-fluid">
-    <!-- WIDGET TOTAL PANIER FIXE -->
-    <?php if (isset($_SESSION['temp_arrivals']) && count($_SESSION['temp_arrivals']) > 0) {
-      $totalPanierWidget = 0;
-      foreach ($_SESSION['temp_arrivals'] as $item) {
-        $totalPanierWidget += ($item['customprice'] * $item['quantity']);
-      }
-    ?>
-    <div class="alert alert-success" style="margin-bottom: 20px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-      <div class="row-fluid">
-        <div class="span8">
-          <strong><i class="icon-shopping-cart"></i> PANIER D'ARRIVAGE:</strong> 
-          <?php echo count($_SESSION['temp_arrivals']); ?> produit(s) en attente
+    <div id="content-header">
+        <div id="breadcrumb">
+            <a href="dashboard.php" class="tip-bottom"><i class="icon-home"></i> Accueil</a>
+            <a href="arrival.php" class="current">Gestion des Importations</a>
         </div>
-        <div class="span4" style="text-align: right;">
-          <strong>TOTAL: <span class="cart-total" style="font-size: 18px; color: #2d6987;"><?php echo number_format($totalPanierWidget, 2); ?></span> Gnf</strong>
-        </div>
-      </div>
-    </div>
-    <?php } ?>
-    
-    <hr>
-    
-    <!-- FORMULAIRE DE RECHERCHE DE PRODUITS -->
-    <div class="row-fluid">
-      <div class="span12">
-        <form method="get" action="arrival.php" class="form-inline">
-          <label>Rechercher des Produits:</label>
-          <input type="text" name="searchTerm" class="span3" placeholder="Nom du produit..." list="productsList" />
-          <datalist id="productsList">
-            <?php
-            foreach ($productNames as $pname) {
-              echo '<option value="' . htmlspecialchars($pname) . '"></option>';
-            }
-            ?>
-          </datalist>
-          <button type="submit" class="btn btn-primary">Rechercher</button>
-        </form>
-      </div>
-    </div>
-    <hr>
-
-    <!-- RÉSULTATS DE RECHERCHE -->
-    <?php
-    if (!empty($_GET['searchTerm'])) {
-      $searchTerm = mysqli_real_escape_string($con, $_GET['searchTerm']);
-      $sql = "
-        SELECT 
-            p.ID,
-            p.ProductName,
-            p.Price,
-            p.$stockColumnName as Stock,
-            c.CategoryName
-        FROM tblproducts p
-        LEFT JOIN tblcategory c ON c.ID = p.CatID
-        WHERE 
-            p.ProductName LIKE ?
-      ";
-
-      // Prepare query
-      $stmt = mysqli_prepare($con, $sql);
-      if (!$stmt) {
-        die("MySQL prepare error: " . mysqli_error($con));
-      }
-      
-      $searchParam = "%$searchTerm%";
-      mysqli_stmt_bind_param($stmt, "s", $searchParam);
-      mysqli_stmt_execute($stmt);
-      $res = mysqli_stmt_get_result($stmt);
-      
-      if (!$res) {
-        die("MySQL error: " . mysqli_error($con));
-      }
-
-      $count = mysqli_num_rows($res);
-    ?>
-    <div class="row-fluid">
-      <div class="span12">
-        <h4>Résultats de recherche pour "<em><?= htmlspecialchars($_GET['searchTerm']) ?></em>"</h4>
-
-        <?php if ($count > 0) { ?>
-        <table class="table table-bordered table-striped">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Nom du Produit</th>
-              <th>Catégorie</th>
-              <th>Prix Actuel</th>
-              <th>Prix Personnalisé</th>
-              <th>Stock</th>
-              <th>Quantité</th>
-              <th>Ajouter à l'Arrivage</th>
-            </tr>
-          </thead>
-          <tbody>
-          <?php
-          $i = 1;
-          while ($row = mysqli_fetch_assoc($res)) {
-            $stockStatus = '';
-            
-            if ($row['Stock'] <= 0) {
-              $stockStatus = '<span class="stock-status stock-danger">Rupture</span>';
-            } elseif ($row['Stock'] < 5) {
-              $stockStatus = '<span class="stock-status stock-warning">Faible</span>';
-            } else {
-              $stockStatus = '<span class="stock-status stock-ok">Disponible</span>';
-            }
-          ?>
-            <tr>
-              <td><?php echo $i++; ?></td>
-              <td><?php echo $row['ProductName']; ?></td>
-              <td><?php echo $row['CategoryName']; ?></td>
-              <td><small><?php echo number_format($row['Price'], 2); ?></small></td>
-              <td>
-                <form method="post" action="arrival.php" style="margin:0;">
-                  <input type="hidden" name="productid" value="<?php echo $row['ID']; ?>" />
-                  <input type="number" name="customprice" value="<?php echo $row['Price']; ?>" 
-                         step="0.01" min="0.01" style="width:80px;" class="custom-price" 
-                         placeholder="Prix perso" title="Prix personnalisé pour ce produit" />
-              </td>
-              <td><?php echo $row['Stock'] . ' ' . $stockStatus; ?></td>
-              <td>
-                  <input type="number" name="quantity" value="1" min="1" style="width:60px;" />
-              </td>
-              <td>
-                <button type="submit" name="addtoarrival" class="btn btn-success btn-small">
-                  <i class="icon-plus"></i> Ajouter
-                </button>
-                </form>
-              </td>
-            </tr>
-          <?php
-          }
-          ?>
-          </tbody>
-        </table>
-        <?php } else { ?>
-          <p style="color:red;">Aucun produit correspondant trouvé.</p>
-        <?php } ?>
-      </div>
-    </div>
-    <hr>
-    <?php } ?>
-
-    <!-- LISTE D'ARRIVAGE TEMPORAIRE -->
-    <div class="row-fluid">
-      <div class="span12">
-        <div class="widget-box">
-          <div class="widget-title">
-            <span class="icon"><i class="icon-th"></i></span>
-            <h5>📦 Arrivages de Produits en Attente</h5>
-            <?php if (isset($_SESSION['temp_arrivals']) && count($_SESSION['temp_arrivals']) > 0) { ?>
-            <a href="arrival.php?clear=1" class="btn btn-small btn-danger" style="float:right;margin:3px;">
-              <i class="icon-remove"></i> Tout Effacer
-            </a>
-            <?php } ?>
-          </div>
-          <div class="widget-content nopadding">
-            <form method="post" action="arrival.php">
-            <table class="table table-bordered">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Nom du Produit</th>
-                  <th>Prix Actuel</th>
-                  <th>Prix Personnalisé</th>
-                  <th>Quantité</th>
-                  <th>Total</th>
-                  <th>Commentaires</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php
-                if (isset($_SESSION['temp_arrivals']) && count($_SESSION['temp_arrivals']) > 0) {
-                  $cnt = 1;
-                  $totalPanier = 0;
-                  foreach ($_SESSION['temp_arrivals'] as $index => $item) {
-                    $totalLine = $item['customprice'] * $item['quantity'];
-                    $totalPanier += $totalLine;
-                  ?>
-                  <tr>
-                    <td><?php echo $cnt++; ?></td>
-                    <td>
-                      <?php echo $item['productname']; ?>
-                      <input type="hidden" name="productid[]" value="<?php echo $item['productid']; ?>" />
-                    </td>
-                    <td><small><?php echo number_format($item['unitprice'], 2); ?></small></td>
-                    <td>
-                      <input type="number" name="customprice[]" value="<?php echo $item['customprice']; ?>" 
-                             step="0.01" min="0.01" style="width:80px;" class="custom-price cart-price-input" required />
-                    </td>
-                    <td>
-                      <input type="number" name="quantity[]" value="<?php echo $item['quantity']; ?>" 
-                             min="1" style="width:60px;" class="cart-quantity-input" required />
-                    </td>
-                    <td class="line-total"><?php echo number_format($totalLine, 2); ?></td>
-                    <td>
-                      <input type="text" name="comments[]" 
-                             value="<?php echo htmlspecialchars($item['comments']); ?>"
-                             placeholder="N° Facture, notes..." />
-                    </td>
-                    <td>
-                      <a href="arrival.php?delid=<?php echo $index; ?>" 
-                         onclick="return confirm('Êtes-vous sûr de vouloir retirer cet article?');">
-                        <i class="icon-trash"></i>
-                      </a>
-                    </td>
-                  </tr>
-                  <?php
-                  }
-                  ?>
-                  <!-- LIGNE DE TOTAL -->
-                  <tr style="background-color: #f8f9fa; border-top: 2px solid #007bff;">
-                    <td colspan="5" style="text-align: right; font-weight: bold; font-size: 16px; padding: 10px;">
-                      <strong>TOTAL DU PANIER:</strong>
-                    </td>
-                    <td style="font-weight: bold; font-size: 18px; color: #007bff; padding: 10px;">
-                      <strong><span class="cart-total"><?php echo number_format($totalPanier, 2); ?></span> Gnf</strong>
-                    </td>
-                    <td colspan="2"></td>
-                  </tr>
-                  <tr>
-                    <td colspan="8" style="padding: 15px;">
-                      <!-- NOUVELLE SECTION INFORMATIONS DE LIVRAISON -->
-                      <div class="delivery-fields">
-                        <h6 style="margin-top: 0; color: #495057;"><i class="icon-truck"></i> 🚚 Informations de Livraison</h6>
-                        <div class="row-fluid">
-                          <div class="span4">
-                            <div class="control-group">
-                              <label class="control-label">Date d'Arrivage:</label>
-                              <div class="controls">
-                                <input type="date" name="arrivaldate" value="<?php echo date('Y-m-d'); ?>" required />
-                                <span class="help-inline">Date de réception en stock</span>
-                              </div>
-                            </div>
-                          </div>
-                          <div class="span4">
-                            <div class="control-group">
-                              <label class="control-label">Date de Livraison:</label>
-                              <div class="controls">
-                                <input type="date" name="deliverydate" value="<?php echo date('Y-m-d'); ?>" class="delivery-date" />
-                                <span class="help-inline">Date de livraison par le fournisseur</span>
-                              </div>
-                            </div>
-                          </div>
-                          <div class="span4">
-                            <div class="control-group">
-                              <label class="control-label">N° Bon de Livraison:</label>
-                              <div class="controls">
-                                <input type="text" name="deliverynote" placeholder="Ex: BL2025-001" maxlength="100" class="delivery-note" />
-                                <span class="help-inline">Numéro du bon de livraison</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <div class="row-fluid">
-                          <div class="span12">
-                            <div class="control-group">
-                              <label class="control-label">Sélectionner Fournisseur:</label>
-                              <div class="controls">
-                                <select name="supplierid" required>
-                                  <option value="">-- Choisir Fournisseur --</option>
-                                  <?php
-                                  $suppQ = mysqli_query($con, "SELECT ID, SupplierName FROM tblsupplier ORDER BY SupplierName ASC");
-                                  while ($sRow = mysqli_fetch_assoc($suppQ)) {
-                                    echo '<option value="'.$sRow['ID'].'">'.$sRow['SupplierName'].'</option>';
-                                  }
-                                  ?>
-                                </select>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div style="text-align: center; margin-top: 15px;">
-                        <div class="alert alert-info" style="margin-bottom: 15px;">
-                          <strong><i class="icon-info-sign"></i> Résumé:</strong> 
-                          <?php echo count($_SESSION['temp_arrivals']); ?> produit(s) • 
-                          Total: <strong><span class="cart-total"><?php echo number_format($totalPanier, 2); ?></span> Gnf</strong>
-                        </div>
-                        <button type="submit" name="submit" class="btn btn-success btn-large">
-                          <i class="icon-check"></i> 📦 Enregistrer Tous les Arrivages (<span class="cart-total"><?php echo number_format($totalPanier, 2); ?></span> Gnf)
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                <?php } else { ?>
-                  <tr>
-                    <td colspan="8" style="text-align:center;">Aucun arrivage en attente. Utilisez la recherche ci-dessus pour ajouter des produits.</td>
-                  </tr>
-                <?php } ?>
-              </tbody>
-            </table>
-            </form>
-          </div>
-        </div>
-      </div>
+        <h1>🚢 Gestion Complète des Importations & Calcul des Prix</h1>
     </div>
 
-    <hr>
-
-    <!-- FORMULAIRE D'ARRIVAGE PRODUIT UNIQUE -->
-    <div class="row-fluid">
-      <div class="span12">
-        <div class="widget-box">
-          <div class="widget-title">
-            <span class="icon"><i class="icon-align-justify"></i></span>
-            <h5>⚡ Ajout Rapide d'Arrivage Produit Unique</h5>
-          </div>
-          <div class="widget-content nopadding">
-            <form method="post" class="form-horizontal" id="singleArrivalForm">
-              
-              <!-- NOUVELLE SECTION INFORMATIONS DE LIVRAISON -->
-              <div class="delivery-fields">
-                <h6 style="margin-top: 0; color: #495057;"><i class="icon-truck"></i> 🚚 Informations de Livraison</h6>
-                
-                <!-- Arrival Date -->
-                <div class="control-group">
-                  <label class="control-label">Date d'Arrivage:</label>
-                  <div class="controls">
-                    <input type="date" name="arrivaldate" value="<?php echo date('Y-m-d'); ?>" required />
-                    <span class="help-inline">Date de réception en stock</span>
-                  </div>
+    <div class="container-fluid">
+        
+        <!-- EN-TÊTE IMPORTATION COURANTE -->
+        <?php if ($currentImport) { ?>
+        <div class="import-header">
+            <div class="row-fluid">
+                <div class="span8">
+                    <h3><i class="icon-folder-open"></i> Dossier Actuel: <?php echo $currentImport['ImportRef']; ?></h3>
+                    <p><strong>Fournisseur:</strong> <?php echo $currentImport['SupplierName']; ?></p>
+                    <p><strong>BL:</strong> <?php echo $currentImport['BLNumber']; ?> | 
+                       <strong>Container:</strong> <?php echo $currentImport['ContainerNumber']; ?></p>
                 </div>
-
-                <!-- Delivery Date -->
-                <div class="control-group">
-                  <label class="control-label">Date de Livraison:</label>
-                  <div class="controls">
-                    <input type="date" name="deliverydate" value="<?php echo date('Y-m-d'); ?>" class="delivery-date" />
-                    <span class="help-inline">Date de livraison par le fournisseur</span>
-                  </div>
-                </div>
-
-                <!-- Delivery Note -->
-                <div class="control-group">
-                  <label class="control-label">N° Bon de Livraison:</label>
-                  <div class="controls">
-                    <input type="text" name="deliverynote" placeholder="Ex: BL2025-001" maxlength="100" class="delivery-note" />
-                    <span class="help-inline">Numéro du bon de livraison du fournisseur</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Product -->
-              <div class="control-group">
-                <label class="control-label">Sélectionner Produit:</label>
-                <div class="controls">
-                  <select name="productid" id="productSelect" required>
-                    <option value="">-- Choisir Produit --</option>
-                    <?php
-                    // Load products with data-price
-                    $prodQ = mysqli_query($con, "SELECT ID, ProductName, Price FROM tblproducts ORDER BY ProductName ASC");
-                    while ($pRow = mysqli_fetch_assoc($prodQ)) {
-                      echo '<option value="'.$pRow['ID'].'" data-price="'.$pRow['Price'].'">'.$pRow['ProductName'].'</option>';
-                    }
-                    ?>
-                  </select>
-                </div>
-              </div>
-
-              <!-- Supplier -->
-              <div class="control-group">
-                <label class="control-label">Sélectionner Fournisseur:</label>
-                <div class="controls">
-                  <select name="supplierid" required>
-                    <option value="">-- Choisir Fournisseur --</option>
-                    <?php
-                    $suppQ = mysqli_query($con, "SELECT ID, SupplierName FROM tblsupplier ORDER BY SupplierName ASC");
-                    while ($sRow = mysqli_fetch_assoc($suppQ)) {
-                      echo '<option value="'.$sRow['ID'].'">'.$sRow['SupplierName'].'</option>';
-                    }
-                    ?>
-                  </select>
-                </div>
-              </div>
-
-              <!-- Prix Personnalisé -->
-              <div class="control-group">
-                <label class="control-label">Prix Personnalisé:</label>
-                <div class="controls">
-                  <input type="number" name="customprice" id="customPrice" step="0.01" min="0.01" value="0" 
-                         class="custom-price" placeholder="Prix personnalisé" required />
-                  <span class="help-inline">Prix à utiliser pour le calcul du coût</span>
-                </div>
-              </div>
-
-              <!-- Quantity -->
-              <div class="control-group">
-                <label class="control-label">Quantité:</label>
-                <div class="controls">
-                  <input type="number" name="quantity" id="quantity" min="1" value="1" required />
-                </div>
-              </div>
-
-              <!-- Coût Total (calculé automatiquement) -->
-              <div class="control-group">
-                <label class="control-label">Coût Total (auto):</label>
-                <div class="controls">
-                  <input type="number" id="costDisplay" step="any" min="0" value="0" readonly 
-                         style="background-color: #f5f5f5;" />
-                  <span class="help-inline">Prix personnalisé × Quantité</span>
-                </div>
-              </div>
-
-              <!-- Comments (Optional) -->
-              <div class="control-group">
-                <label class="control-label">Commentaires (optionnel):</label>
-                <div class="controls">
-                  <input type="text" name="comments" placeholder="N° Facture, notes..." />
-                </div>
-              </div>
-
-              <div class="form-actions">
-                <button type="submit" name="submit_single" class="btn btn-success">
-                  📦 Enregistrer l'Arrivage Unique
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <hr>
-
-    <!-- LISTE DES ARRIVAGES RÉCENTS - MODIFIÉE POUR INCLURE LES NOUVELLES COLONNES -->
-    <div class="row-fluid">
-      <div class="span12">
-        <div class="widget-box">
-          <div class="widget-title">
-            <span class="icon"><i class="icon-th"></i></span>
-            <h5>📋 Arrivages Récents de Produits</h5>
-          </div>
-          <div class="widget-content nopadding">
-            <table class="table table-bordered data-table arrivals-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Date d'Arrivage</th>
-                  <th>Date de Livraison</th>
-                  <th>Bon de Livraison</th>
-                  <th>Produit</th>
-                  <th>Fournisseur</th>
-                  <th>Qté</th>
-                  <th>Prix Unitaire Actuel</th>
-                  <th>Coût Total Enregistré</th>
-                  <th>Commentaires</th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php
-                $cnt = 1;
-                while ($row = mysqli_fetch_assoc($resArrivals)) {
-                  $unitPrice = floatval($row['UnitPrice']);
-                  $qty       = floatval($row['Quantity']);
-                  $costRecorded = floatval($row['Cost']);
-                  ?>
-                  <tr>
-                    <td><?php echo $cnt; ?></td>
-                    <td><?php echo $row['ArrivalDate']; ?></td>
-                    <td class="delivery-date-cell">
-                      <?php echo $row['DeliveryDate'] ? $row['DeliveryDate'] : '<span class="delivery-missing">-</span>'; ?>
-                    </td>
-                    <td class="delivery-note-cell">
-                      <?php 
-                      if ($row['DeliveryNote']) {
-                        echo $row['DeliveryNote'] . '<span class="delivery-badge">✓</span>';
-                      } else {
-                        echo '<span class="delivery-missing">-</span>';
-                      }
-                      ?>
-                    </td>
-                    <td><?php echo $row['ProductName']; ?></td>
-                    <td><?php echo $row['SupplierName']; ?></td>
-                    <td><?php echo $qty; ?></td>
-                    <td><?php echo number_format($unitPrice,2); ?></td>
-                    <td><?php echo number_format($costRecorded,2); ?></td>
-                    <td><?php echo $row['Comments']; ?></td>
-                  </tr>
-                  <?php
-                  $cnt++;
-                }
-                ?>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- NOUVELLE SECTION : APERÇU DES MARGES -->
-    <div class="row-fluid">
-      <div class="span12">
-        <div class="widget-box">
-          <div class="widget-title">
-            <span class="icon"><i class="icon-calculator"></i></span>
-            <h5>💰 Impact sur les Marges</h5>
-            <a href="margins.php" class="btn btn-small btn-info" style="float:right;margin:3px;">
-              <i class="icon-external-link"></i> Voir Toutes les Marges
-            </a>
-          </div>
-          <div class="widget-content nopadding">
-            <?php
-            // Requête pour les produits récemment arrivés avec calcul de marge
-            $sqlRecentMargins = "
-                SELECT DISTINCT
-                    p.ID,
-                    p.ProductName,
-                    p.Price as SalePrice,
-                    p.CostPrice,
-                    p.TargetMargin,
-                    CASE 
-                        WHEN p.CostPrice > 0 THEN 
-                            ROUND(((p.Price - p.CostPrice) / p.Price) * 100, 2)
-                        ELSE 0 
-                    END as ActualMarginPercent,
-                    CASE 
-                        WHEN p.CostPrice > 0 THEN 
-                            ROUND(p.Price - p.CostPrice, 2)
-                        ELSE 0 
-                    END as ProfitPerUnit,
-                    p.LastCostUpdate
-                FROM tblproducts p
-                INNER JOIN tblproductarrivals a ON a.ProductID = p.ID
-                WHERE a.ArrivalDate >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-                ORDER BY p.LastCostUpdate DESC
-                LIMIT 10
-            ";
-            $resRecentMargins = mysqli_query($con, $sqlRecentMargins);
-            ?>
-            
-            <table class="table table-bordered table-striped">
-              <thead>
-                <tr>
-                  <th>Produit</th>
-                  <th>Prix Vente</th>
-                  <th>Prix Achat Moyen</th>
-                  <th>Marge Réelle</th>
-                  <th>Marge Cible</th>
-                  <th>Profit/Unité</th>
-                  <th>Statut</th>
-                  <th>Dernière MAJ</th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php
-                if (mysqli_num_rows($resRecentMargins) > 0) {
-                    while ($margin = mysqli_fetch_assoc($resRecentMargins)) {
-                        // Déterminer le statut de la marge
-                        $statusClass = '';
-                        $statusText = '';
-                        
-                        if ($margin['CostPrice'] == 0) {
-                            $statusClass = 'label-info';
-                            $statusText = 'Prix d\'achat en attente';
-                        } elseif ($margin['TargetMargin'] == 0) {
-                            $statusClass = 'label-warning';
-                            $statusText = 'Marge cible non définie';
-                        } elseif ($margin['ActualMarginPercent'] >= $margin['TargetMargin']) {
-                            $statusClass = 'label-success';
-                            $statusText = 'Objectif atteint';
-                        } else {
-                            $statusClass = 'label-important';
-                            $statusText = 'Sous l\'objectif';
-                        }
-                ?>
-                <tr>
-                  <td><strong><?php echo $margin['ProductName']; ?></strong></td>
-                  <td><?php echo number_format($margin['SalePrice'], 2); ?></td>
-                  <td><?php echo number_format($margin['CostPrice'], 2); ?></td>
-                  <td>
-                    <span class="label <?php echo ($margin['ActualMarginPercent'] > 20) ? 'label-success' : (($margin['ActualMarginPercent'] > 10) ? 'label-warning' : 'label-important'); ?>">
-                      <?php echo $margin['ActualMarginPercent']; ?>%
+                <div class="span4" style="text-align: right;">
+                    <p><strong class="currency-usd">Valeur: $<?php echo number_format($currentImport['TotalValueUSD'], 2); ?></strong></p>
+                    <p><strong>Taux:</strong> <?php echo number_format($currentImport['ExchangeRate'], 0); ?> GNF/USD</p>
+                    <p><strong class="currency-gnf">Total: <?php echo number_format($currentImport['TotalCostGNF'], 0); ?> GNF</strong></p>
+                    <span class="label label-<?php echo $currentImport['Status'] == 'en_cours' ? 'warning' : ($currentImport['Status'] == 'termine' ? 'success' : 'important'); ?>">
+                        <?php echo strtoupper($currentImport['Status']); ?>
                     </span>
-                  </td>
-                  <td><?php echo $margin['TargetMargin'] ? $margin['TargetMargin'].'%' : '-'; ?></td>
-                  <td style="color: <?php echo ($margin['ProfitPerUnit'] > 0) ? '#28a745' : '#dc3545'; ?>; font-weight: bold;">
-                    <?php echo number_format($margin['ProfitPerUnit'], 2); ?>
-                  </td>
-                  <td>
-                    <span class="label <?php echo $statusClass; ?>"><?php echo $statusText; ?></span>
-                  </td>
-                  <td><small><?php echo $margin['LastCostUpdate'] ? date('d/m/Y H:i', strtotime($margin['LastCostUpdate'])) : '-'; ?></small></td>
-                </tr>
-                <?php
-                    }
-                } else {
-                ?>
-                <tr>
-                  <td colspan="8" style="text-align: center;">
-                    Aucun arrivage récent trouvé. Les marges seront calculées après les premiers arrivages.
-                  </td>
-                </tr>
-                <?php } ?>
-              </tbody>
-            </table>
-            
-            <div class="alert alert-info" style="margin: 10px;">
-              <strong><i class="icon-info-sign"></i> À propos des marges :</strong>
-              Les prix d'achat sont automatiquement calculés à partir de la moyenne des 5 derniers arrivages.
-              La marge réelle est calculée selon la formule : <code>(Prix Vente - Prix Achat) / Prix Vente × 100</code>
-              <br>
-              <a href="margins.php" class="btn btn-small btn-primary" style="margin-top: 5px;">
-                <i class="icon-calculator"></i> Gérer les Marges Complètes
-              </a>
+                </div>
             </div>
-          </div>
         </div>
-      </div>
+        <?php } ?>
+
+        <!-- ONGLETS DE NAVIGATION -->
+        <div class="tabs">
+            <ul class="nav-tabs">
+                <li class="active"><a href="#tab-imports" onclick="showTab('imports')">📋 Dossiers d'Importation</a></li>
+                <li><a href="#tab-fees" onclick="showTab('fees')">💰 Frais d'Importation</a></li>
+                <li><a href="#tab-products" onclick="showTab('products')">📦 Produits & Prix</a></li>
+                <li><a href="#tab-pricing" onclick="showTab('pricing')">🏷️ Application des Prix</a></li>
+                <li><a href="#tab-reports" onclick="showTab('reports')">📊 Rapports</a></li>
+            </ul>
+
+            <!-- TAB 1: GESTION DES DOSSIERS D'IMPORTATION -->
+            <div id="tab-imports" class="tab-content active">
+                <div class="row-fluid">
+                    <!-- CRÉER NOUVEAU DOSSIER -->
+                    <div class="span6">
+                        <div class="widget-box">
+                            <div class="widget-title">
+                                <span class="icon"><i class="icon-plus"></i></span>
+                                <h5>🆕 Créer Nouveau Dossier d'Importation</h5>
+                            </div>
+                            <div class="widget-content">
+                                <form method="post" class="form-horizontal">
+                                    <div class="control-group">
+                                        <label class="control-label">Référence Dossier:</label>
+                                        <div class="controls">
+                                            <input type="text" name="import_ref" placeholder="Ex: 003/CT/2025" required />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">N° Facture:</label>
+                                        <div class="controls">
+                                            <input type="text" name="facture_number" placeholder="Ex: 007" />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">N° BL:</label>
+                                        <div class="controls">
+                                            <input type="text" name="bl_number" placeholder="Ex: 234034521" />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">N° Container:</label>
+                                        <div class="controls">
+                                            <input type="text" name="container_number" placeholder="Ex: MSKU1743847/0" />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Fournisseur:</label>
+                                        <div class="controls">
+                                            <select name="supplier_id" required>
+                                                <option value="">-- Choisir Fournisseur --</option>
+                                                <?php
+                                                mysqli_data_seek($suppliersQuery, 0);
+                                                while ($supplier = mysqli_fetch_assoc($suppliersQuery)) {
+                                                    echo '<option value="'.$supplier['ID'].'">'.$supplier['SupplierName'].'</option>';
+                                                }
+                                                ?>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Date d'Importation:</label>
+                                        <div class="controls">
+                                            <input type="date" name="import_date" value="<?php echo date('Y-m-d'); ?>" required />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Valeur Facture (USD):</label>
+                                        <div class="controls">
+                                            <input type="number" name="total_value_usd" step="0.01" min="0" placeholder="68076.40" required />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Taux de Change (GNF/USD):</label>
+                                        <div class="controls">
+                                            <input type="number" name="exchange_rate" step="0.01" min="0" placeholder="12700" required />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Description:</label>
+                                        <div class="controls">
+                                            <textarea name="description" placeholder="FRAIS DE SORTIE D'ALUMINIUM PROFILES..."></textarea>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="form-actions">
+                                        <button type="submit" name="create_import" class="btn btn-success">
+                                            <i class="icon-plus"></i> Créer Dossier d'Importation
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- LISTE DES IMPORTATIONS RÉCENTES -->
+                    <div class="span6">
+                        <div class="widget-box">
+                            <div class="widget-title">
+                                <span class="icon"><i class="icon-list"></i></span>
+                                <h5>📋 Dossiers d'Importation Récents</h5>
+                            </div>
+                            <div class="widget-content nopadding">
+                                <table class="table table-bordered table-striped">
+                                    <thead>
+                                        <tr>
+                                            <th>Référence</th>
+                                            <th>Fournisseur</th>
+                                            <th>Valeur (USD)</th>
+                                            <th>Total (GNF)</th>
+                                            <th>Statut</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php while ($import = mysqli_fetch_assoc($recentImportsQuery)) { ?>
+                                        <tr <?php echo ($import['ID'] == $currentImportId) ? 'style="background-color: #e8f4f8;"' : ''; ?>>
+                                            <td>
+                                                <strong><?php echo $import['ImportRef']; ?></strong><br>
+                                                <small><?php echo $import['BLNumber']; ?></small>
+                                            </td>
+                                            <td><?php echo $import['SupplierName']; ?></td>
+                                            <td class="currency-usd">$<?php echo number_format($import['TotalValueUSD'], 0); ?></td>
+                                            <td class="currency-gnf"><?php echo number_format($import['TotalCostGNF'], 0); ?></td>
+                                            <td>
+                                                <span class="label import-status-<?php echo $import['Status']; ?>">
+                                                    <?php echo strtoupper($import['Status']); ?>
+                                                </span><br>
+                                                <small><?php echo $import['ProductCount']; ?> produits</small>
+                                            </td>
+                                            <td>
+                                                <?php if ($import['ID'] != $currentImportId) { ?>
+                                                <a href="arrival.php?select_import=<?php echo $import['ID']; ?>" 
+                                                   class="btn btn-mini btn-primary">
+                                                    <i class="icon-folder-open"></i> Sélectionner
+                                                </a>
+                                                <?php } else { ?>
+                                                <span class="label label-info">Actuel</span>
+                                                <?php } ?>
+                                            </td>
+                                        </tr>
+                                        <?php } ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: GESTION DES FRAIS -->
+            <div id="tab-fees" class="tab-content">
+                <?php if ($currentImport) { ?>
+                <div class="row-fluid">
+                    <div class="span8">
+                        <div class="widget-box">
+                            <div class="widget-title">
+                                <span class="icon"><i class="icon-money"></i></span>
+                                <h5>💰 Ajouter Frais d'Importation</h5>
+                            </div>
+                            <div class="widget-content">
+                                <form method="post" id="feesForm">
+                                    <input type="hidden" name="import_id" value="<?php echo $currentImportId; ?>" />
+                                    
+                                    <div id="feesContainer">
+                                        <?php 
+                                        $feeIndex = 0;
+                                        mysqli_data_seek($feeTypesQuery, 0);
+                                        while ($feeType = mysqli_fetch_assoc($feeTypesQuery)) { 
+                                        ?>
+                                        <div class="fee-row">
+                                            <div class="row-fluid">
+                                                <div class="span4">
+                                                    <label>
+                                                        <input type="checkbox" name="fee_type_id[]" value="<?php echo $feeType['ID']; ?>" 
+                                                               onchange="toggleFeeRow(this, <?php echo $feeIndex; ?>)" />
+                                                        <strong><?php echo $feeType['FeeName']; ?></strong>
+                                                    </label>
+                                                    <small style="display: block; color: #666;"><?php echo $feeType['Description']; ?></small>
+                                                </div>
+                                                <div class="span3">
+                                                    <input type="number" name="fee_amount[]" step="0.01" min="0" 
+                                                           value="<?php echo $feeType['DefaultAmount']; ?>"
+                                                           placeholder="Montant en GNF" class="fee-amount" disabled />
+                                                </div>
+                                                <div class="span2">
+                                                    <label>
+                                                        <input type="checkbox" name="payed_by_client[]" value="<?php echo $feeIndex; ?>" 
+                                                               <?php echo $feeType['PayedByClient'] ? 'checked' : ''; ?> disabled />
+                                                        Client paie
+                                                    </label>
+                                                </div>
+                                                <div class="span3">
+                                                    <input type="text" name="fee_comments[]" placeholder="Commentaires" class="fee-comment" disabled />
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <?php 
+                                        $feeIndex++;
+                                        } 
+                                        ?>
+                                    </div>
+                                    
+                                    <div class="form-actions">
+                                        <button type="submit" name="add_import_fees" class="btn btn-success">
+                                            <i class="icon-plus"></i> Ajouter Frais Sélectionnés
+                                        </button>
+                                        <button type="button" class="btn btn-info" onclick="calculateTotalFees()">
+                                            <i class="icon-calculator"></i> Calculer Total
+                                        </button>
+                                    </div>
+                                    
+                                    <div id="feesSummary" class="cost-breakdown" style="display: none;">
+                                        <h6>💰 Résumé des Frais:</h6>
+                                        <div id="feesBreakdown"></div>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- FRAIS DÉJÀ AJOUTÉS -->
+                    <div class="span4">
+                        <div class="widget-box">
+                            <div class="widget-title">
+                                <span class="icon"><i class="icon-list-alt"></i></span>
+                                <h5>📋 Frais Enregistrés</h5>
+                            </div>
+                            <div class="widget-content">
+                                <?php
+                                $existingFeesQuery = mysqli_query($con, "
+                                    SELECT f.*, ft.FeeName 
+                                    FROM tblimportfees f 
+                                    LEFT JOIN tblimportfees_types ft ON ft.ID = f.FeeTypeID 
+                                    WHERE f.ImportationID = $currentImportId 
+                                    ORDER BY f.ID
+                                ");
+                                
+                                $totalExistingFees = 0;
+                                if (mysqli_num_rows($existingFeesQuery) > 0) {
+                                    while ($fee = mysqli_fetch_assoc($existingFeesQuery)) {
+                                        $totalExistingFees += $fee['Amount'];
+                                        ?>
+                                        <div class="fee-item" style="padding: 8px; border-bottom: 1px solid #eee;">
+                                            <strong><?php echo $fee['FeeName']; ?></strong><br>
+                                            <span class="currency-gnf"><?php echo number_format($fee['Amount'], 0); ?> GNF</span>
+                                            <?php if ($fee['PayedByClient']) { ?>
+                                                <span class="label label-info">Client</span>
+                                            <?php } ?>
+                                            <?php if ($fee['Comments']) { ?>
+                                                <br><small><?php echo $fee['Comments']; ?></small>
+                                            <?php } ?>
+                                        </div>
+                                        <?php
+                                    }
+                                    ?>
+                                    <div style="padding: 10px; background: #f8f9fa; margin-top: 10px;">
+                                        <strong>Total Frais: <span class="currency-gnf"><?php echo number_format($totalExistingFees, 0); ?> GNF</span></strong>
+                                    </div>
+                                    <?php
+                                } else {
+                                    echo '<p style="text-align: center; color: #999;">Aucun frais enregistré</p>';
+                                }
+                                ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <?php } else { ?>
+                <div class="alert alert-warning">
+                    <strong>⚠️ Aucun dossier d'importation sélectionné!</strong><br>
+                    Sélectionnez ou créez un dossier d'importation d'abord.
+                </div>
+                <?php } ?>
+            </div>
+
+            <!-- TAB 3: PRODUITS & PRIX -->
+            <div id="tab-products" class="tab-content">
+                <?php if ($currentImport) { ?>
+                <div class="row-fluid">
+                    <div class="span8">
+                        <div class="widget-box">
+                            <div class="widget-title">
+                                <span class="icon"><i class="icon-shopping-cart"></i></span>
+                                <h5>📦 Ajouter Produit à l'Importation</h5>
+                            </div>
+                            <div class="widget-content">
+                                <form method="post" class="form-horizontal" id="productForm">
+                                    <input type="hidden" name="import_id" value="<?php echo $currentImportId; ?>" />
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Produit:</label>
+                                        <div class="controls">
+                                            <select name="product_id" id="productSelect" required onchange="updateProductInfo()">
+                                                <option value="">-- Choisir Produit --</option>
+                                                <?php
+                                                mysqli_data_seek($productsQuery, 0);
+                                                while ($product = mysqli_fetch_assoc($productsQuery)) {
+                                                    echo '<option value="'.$product['ID'].'" data-current-price="'.$product['Price'].'">'.$product['ProductName'].'</option>';
+                                                }
+                                                ?>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Quantité:</label>
+                                        <div class="controls">
+                                            <input type="number" name="quantity" id="quantity" min="1" value="1" required onchange="calculateCosts()" />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Prix Unitaire (USD):</label>
+                                        <div class="controls">
+                                            <input type="number" name="unit_price_usd" id="unitPriceUSD" step="0.01" min="0" required onchange="calculateCosts()" />
+                                            <span class="help-inline">Prix de la facture fournisseur</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Frais Alloués (GNF):</label>
+                                        <div class="controls">
+                                            <input type="number" name="allocated_fees" id="allocatedFees" step="0.01" min="0" value="0" onchange="calculateCosts()" />
+                                            <span class="help-inline">Part des frais d'importation pour ce produit</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Marge Suggérée (%):</label>
+                                        <div class="controls">
+                                            <input type="number" name="suggested_margin" id="suggestedMargin" step="0.01" min="0" value="25" onchange="calculateCosts()" />
+                                            <span class="help-inline">Marge bénéficiaire désirée</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="price-calculation" id="costCalculation" style="display: none;">
+                                        <h6>🧮 Calcul des Coûts:</h6>
+                                        <div id="costBreakdown"></div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Date d'Arrivage:</label>
+                                        <div class="controls">
+                                            <input type="date" name="arrival_date" value="<?php echo date('Y-m-d'); ?>" required />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Date de Livraison:</label>
+                                        <div class="controls">
+                                            <input type="date" name="delivery_date" value="<?php echo $currentImport['ImportDate']; ?>" />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Bon de Livraison:</label>
+                                        <div class="controls">
+                                            <input type="text" name="delivery_note" value="<?php echo $currentImport['BLNumber']; ?>" />
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="control-group">
+                                        <label class="control-label">Commentaires:</label>
+                                        <div class="controls">
+                                            <textarea name="comments" placeholder="Notes supplémentaires..."></textarea>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="form-actions">
+                                        <button type="submit" name="add_import_product" class="btn btn-success">
+                                            <i class="icon-plus"></i> Ajouter Produit à l'Importation
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- AIDE AU CALCUL DES FRAIS -->
+                    <div class="span4">
+                        <div class="widget-box">
+                            <div class="widget-title">
+                                <span class="icon"><i class="icon-info-sign"></i></span>
+                                <h5>ℹ️ Aide & Infos</h5>
+                            </div>
+                            <div class="widget-content">
+                                <div class="import-card">
+                                    <h6>📊 Informations Importation:</h6>
+                                    <p><strong>Référence:</strong> <?php echo $currentImport['ImportRef']; ?></p>
+                                    <p><strong>Valeur Facture:</strong> <span class="currency-usd">$<?php echo number_format($currentImport['TotalValueUSD'], 2); ?></span></p>
+                                    <p><strong>Taux de Change:</strong> <?php echo number_format($currentImport['ExchangeRate'], 0); ?> GNF/USD</p>
+                                    <p><strong>Total Frais:</strong> <span class="currency-gnf"><?php echo number_format($currentImport['TotalFees'], 0); ?> GNF</span></p>
+                                    <p><strong>Coût Total:</strong> <span class="currency-gnf"><?php echo number_format($currentImport['TotalCostGNF'], 0); ?> GNF</span></p>
+                                </div>
+                                
+                                <div class="import-card">
+                                    <h6>💡 Conseils pour Répartition des Frais:</h6>
+                                    <ul style="font-size: 12px;">
+                                        <li>Répartir selon la valeur du produit</li>
+                                        <li>Considérer le poids/volume</li>
+                                        <li>Produits chers = plus de frais</li>
+                                        <li>Marge recommandée: 20-35%</li>
+                                    </ul>
+                                </div>
+
+                                <div class="import-card">
+                                    <h6>🧮 Calculateur Rapide de Frais:</h6>
+                                    <div class="input-group">
+                                        <input type="number" id="quickCalcPercent" placeholder="% de <?php echo number_format($currentImport['TotalFees'], 0); ?>" 
+                                               onchange="quickCalculateFees()" style="width: 60px;" />
+                                        <span> % = </span>
+                                        <strong id="quickCalcResult" class="currency-gnf">0 GNF</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <?php } else { ?>
+                <div class="alert alert-warning">
+                    <strong>⚠️ Aucun dossier d'importation sélectionné!</strong><br>
+                    Sélectionnez ou créez un dossier d'importation d'abord.
+                </div>
+                <?php } ?>
+            </div>
+
+            <!-- TAB 4: APPLICATION DES PRIX -->
+            <div id="tab-pricing" class="tab-content">
+                <?php if ($currentImport) { ?>
+                <div class="row-fluid">
+                    <div class="span12">
+                        <div class="widget-box">
+                            <div class="widget-title">
+                                <span class="icon"><i class="icon-tags"></i></span>
+                                <h5>🏷️ Application des Prix de Vente</h5>
+                            </div>
+                            <div class="widget-content nopadding">
+                                <?php
+                                $importProductsQuery = mysqli_query($con, "
+                                    SELECT pa.*, p.ProductName, p.Price as CurrentPrice 
+                                    FROM tblproductarrivals pa 
+                                    LEFT JOIN tblproducts p ON p.ID = pa.ProductID 
+                                    WHERE pa.ImportationID = $currentImportId 
+                                    ORDER BY pa.ID DESC
+                                ");
+                                
+                                if (mysqli_num_rows($importProductsQuery) > 0) {
+                                ?>
+                                <form method="post">
+                                    <table class="table table-bordered table-striped">
+                                        <thead>
+                                            <tr>
+                                                <th>Produit</th>
+                                                <th>Qté</th>
+                                                <th>Prix USD</th>
+                                                <th>Frais Alloués</th>
+                                                <th>Prix Revient</th>
+                                                <th>Prix Actuel</th>
+                                                <th>Prix Suggéré</th>
+                                                <th>Nouveau Prix</th>
+                                                <th>Marge</th>
+                                                <th>Statut</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php while ($product = mysqli_fetch_assoc($importProductsQuery)) { ?>
+                                            <tr>
+                                                <td>
+                                                    <strong><?php echo $product['ProductName']; ?></strong>
+                                                    <input type="hidden" name="arrival_id[]" value="<?php echo $product['ID']; ?>" />
+                                                </td>
+                                                <td><?php echo $product['Quantity']; ?></td>
+                                                <td class="currency-usd">$<?php echo number_format($product['UnitPriceUSD'], 2); ?></td>
+                                                <td class="currency-gnf"><?php echo number_format($product['AllocatedFees'], 0); ?></td>
+                                                <td class="currency-gnf">
+                                                    <strong><?php echo number_format($product['UnitCostPrice'], 0); ?></strong>
+                                                </td>
+                                                <td class="currency-gnf"><?php echo number_format($product['CurrentPrice'], 0); ?></td>
+                                                <td class="currency-gnf"><?php echo number_format($product['SuggestedSalePrice'], 0); ?></td>
+                                                <td>
+                                                    <input type="number" name="sale_price[]" 
+                                                           value="<?php echo $product['SuggestedSalePrice']; ?>" 
+                                                           step="0.01" min="0" style="width: 100px;" 
+                                                           onchange="calculateMargin(this, <?php echo $product['UnitCostPrice']; ?>)" />
+                                                </td>
+                                                <td>
+                                                    <input type="number" name="target_margin[]" 
+                                                           value="<?php echo $product['SuggestedMargin']; ?>" 
+                                                           step="0.01" min="0" style="width: 60px;" />%
+                                                </td>
+                                                <td>
+                                                    <?php if ($product['AppliedToProduct']) { ?>
+                                                        <span class="label label-success">✅ Appliqué</span>
+                                                    <?php } else { ?>
+                                                        <span class="label label-warning">⏳ En attente</span>
+                                                    <?php } ?>
+                                                </td>
+                                            </tr>
+                                            <?php } ?>
+                                        </tbody>
+                                    </table>
+                                    
+                                    <div style="padding: 15px;">
+                                        <button type="submit" name="apply_sale_prices" class="btn btn-success btn-large">
+                                            <i class="icon-check"></i> 🏷️ Appliquer Tous les Prix de Vente
+                                        </button>
+                                        <p class="help-block">
+                                            <strong>⚠️ Attention:</strong> Cette action mettra à jour les prix de vente dans votre catalogue produits.
+                                        </p>
+                                    </div>
+                                </form>
+                                <?php } else { ?>
+                                <div style="padding: 20px; text-align: center;">
+                                    <p>Aucun produit ajouté à cette importation.</p>
+                                    <a href="#tab-products" onclick="showTab('products')" class="btn btn-primary">
+                                        <i class="icon-plus"></i> Ajouter des Produits
+                                    </a>
+                                </div>
+                                <?php } ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <?php } else { ?>
+                <div class="alert alert-warning">
+                    <strong>⚠️ Aucun dossier d'importation sélectionné!</strong><br>
+                    Sélectionnez ou créez un dossier d'importation d'abord.
+                </div>
+                <?php } ?>
+            </div>
+
+            <!-- TAB 5: RAPPORTS -->
+            <div id="tab-reports" class="tab-content">
+                <div class="row-fluid">
+                    <div class="span12">
+                        <div class="widget-box">
+                            <div class="widget-title">
+                                <span class="icon"><i class="icon-bar-chart"></i></span>
+                                <h5>📊 Rapports d'Importation</h5>
+                            </div>
+                            <div class="widget-content">
+                                <?php
+                                // Statistiques générales
+                                $statsQuery = mysqli_query($con, "
+                                    SELECT 
+                                        COUNT(*) as TotalImports,
+                                        SUM(TotalValueUSD) as TotalValueUSD,
+                                        SUM(TotalFees) as TotalFees,
+                                        SUM(TotalCostGNF) as TotalCostGNF,
+                                        AVG(ExchangeRate) as AvgExchangeRate
+                                    FROM tblimportations 
+                                    WHERE ImportDate >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+                                ");
+                                
+                                if ($statsQuery && mysqli_num_rows($statsQuery) > 0) {
+                                    $stats = mysqli_fetch_assoc($statsQuery);
+                                ?>
+                                <div class="row-fluid">
+                                    <div class="span3">
+                                        <div class="stat-box" style="background: #3498db; color: white; padding: 20px; text-align: center; border-radius: 5px;">
+                                            <h3><?php echo $stats['TotalImports']; ?></h3>
+                                            <p>Importations (12 mois)</p>
+                                        </div>
+                                    </div>
+                                    <div class="span3">
+                                        <div class="stat-box" style="background: #2ecc71; color: white; padding: 20px; text-align: center; border-radius: 5px;">
+                                            <h3>$<?php echo number_format($stats['TotalValueUSD'], 0); ?></h3>
+                                            <p>Valeur Totale (USD)</p>
+                                        </div>
+                                    </div>
+                                    <div class="span3">
+                                        <div class="stat-box" style="background: #e74c3c; color: white; padding: 20px; text-align: center; border-radius: 5px;">
+                                            <h3><?php echo number_format($stats['TotalFees'], 0); ?></h3>
+                                            <p>Total Frais (GNF)</p>
+                                        </div>
+                                    </div>
+                                    <div class="span3">
+                                        <div class="stat-box" style="background: #9b59b6; color: white; padding: 20px; text-align: center; border-radius: 5px;">
+                                            <h3><?php echo number_format($stats['AvgExchangeRate'], 0); ?></h3>
+                                            <p>Taux Moyen (GNF/USD)</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php } ?>
+                                
+                                <hr>
+                                
+                                <!-- Détail par importation -->
+                                <h5>📋 Détail des Importations Récentes</h5>
+                                <table class="table table-bordered table-striped">
+                                    <thead>
+                                        <tr>
+                                            <th>Référence</th>
+                                            <th>Date</th>
+                                            <th>Fournisseur</th>
+                                            <th>Valeur (USD)</th>
+                                            <th>Frais (GNF)</th>
+                                            <th>Total (GNF)</th>
+                                            <th>Taux</th>
+                                            <th>Produits</th>
+                                            <th>Statut</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php
+                                        $detailQuery = mysqli_query($con, "
+                                            SELECT i.*, s.SupplierName,
+                                                   COUNT(pa.ID) as ProductCount,
+                                                   SUM(pa.Quantity) as TotalQuantity
+                                            FROM tblimportations i 
+                                            LEFT JOIN tblsupplier s ON s.ID = i.SupplierID 
+                                            LEFT JOIN tblproductarrivals pa ON pa.ImportationID = i.ID
+                                            GROUP BY i.ID 
+                                            ORDER BY i.ImportDate DESC 
+                                            LIMIT 20
+                                        ");
+                                        
+                                        while ($detail = mysqli_fetch_assoc($detailQuery)) {
+                                        ?>
+                                        <tr>
+                                            <td>
+                                                <strong><?php echo $detail['ImportRef']; ?></strong><br>
+                                                <small><?php echo $detail['BLNumber']; ?></small>
+                                            </td>
+                                            <td><?php echo date('d/m/Y', strtotime($detail['ImportDate'])); ?></td>
+                                            <td><?php echo $detail['SupplierName']; ?></td>
+                                            <td class="currency-usd">$<?php echo number_format($detail['TotalValueUSD'], 0); ?></td>
+                                            <td class="currency-gnf"><?php echo number_format($detail['TotalFees'], 0); ?></td>
+                                            <td class="currency-gnf"><strong><?php echo number_format($detail['TotalCostGNF'], 0); ?></strong></td>
+                                            <td><?php echo number_format($detail['ExchangeRate'], 0); ?></td>
+                                            <td>
+                                                <?php echo $detail['ProductCount']; ?> types<br>
+                                                <small><?php echo $detail['TotalQuantity']; ?> unités</small>
+                                            </td>
+                                            <td>
+                                                <span class="label import-status-<?php echo $detail['Status']; ?>">
+                                                    <?php echo strtoupper($detail['Status']); ?>
+                                                </span>
+                                            </td>
+                                        </tr>
+                                        <?php } ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-  </div>
 </div>
+
 <!-- Footer -->
 <?php include_once('includes/footer.php'); ?>
 
@@ -1093,335 +1078,187 @@ $resArrivals = mysqli_query($con, $sqlArrivals);
 <script src="js/jquery.dataTables.min.js"></script>
 <script src="js/matrix.js"></script>
 <script src="js/matrix.tables.js"></script>
+
 <script>
-// NOUVEAUX SCRIPTS POUR LES FONCTIONNALITÉS DE LIVRAISON ET MARGES
-
-// Fonction pour générer automatiquement un numéro de bon de livraison
-function generateDeliveryNote() {
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    const time = String(today.getHours()).padStart(2, '0') + String(today.getMinutes()).padStart(2, '0');
+// GESTION DES ONGLETS
+function showTab(tabName) {
+    // Masquer tous les onglets
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
     
-    return `BL${year}${month}${day}-${time}`;
+    // Désactiver tous les liens
+    document.querySelectorAll('.nav-tabs li').forEach(li => {
+        li.classList.remove('active');
+    });
+    
+    // Activer l'onglet sélectionné
+    document.getElementById('tab-' + tabName).classList.add('active');
+    
+    // Activer le lien correspondant
+    document.querySelector('a[href="#tab-' + tabName + '"]').parentNode.classList.add('active');
 }
 
-// Fonction pour auto-compléter le bon de livraison
-function autoCompleteDeliveryNote() {
-    const deliveryNoteInputs = document.querySelectorAll('input[name="deliverynote"]');
+// GESTION DES FRAIS
+function toggleFeeRow(checkbox, index) {
+    const row = checkbox.closest('.fee-row');
+    const inputs = row.querySelectorAll('input:not([type="checkbox"])');
     
-    deliveryNoteInputs.forEach(function(input) {
-        // Ajouter un bouton pour générer automatiquement
-        const autoBtn = document.createElement('button');
-        autoBtn.type = 'button';
-        autoBtn.className = 'btn btn-mini btn-info';
-        autoBtn.innerHTML = '✨ Auto';
-        autoBtn.title = 'Générer un numéro automatique';
-        autoBtn.style.marginLeft = '5px';
-        
-        autoBtn.addEventListener('click', function() {
-            input.value = generateDeliveryNote();
-        });
-        
-        // Insérer le bouton après l'input
-        if (input.parentNode) {
-            input.parentNode.appendChild(autoBtn);
+    inputs.forEach(input => {
+        input.disabled = !checkbox.checked;
+        if (!checkbox.checked) {
+            input.value = input.type === 'number' ? '0' : '';
         }
     });
+    
+    calculateTotalFees();
 }
 
-// NOUVELLE FONCTION : Vérification des marges faibles
-function checkMarginAlert(productId, salePrice, costPrice) {
-    if (costPrice > 0 && salePrice > 0) {
-        const margin = ((salePrice - costPrice) / salePrice) * 100;
+function calculateTotalFees() {
+    const checkedBoxes = document.querySelectorAll('input[name="fee_type_id[]"]:checked');
+    let totalFees = 0;
+    let breakdown = '<table style="width: 100%; font-size: 12px;">';
+    
+    checkedBoxes.forEach((checkbox, index) => {
+        const row = checkbox.closest('.fee-row');
+        const amountInput = row.querySelector('.fee-amount');
+        const amount = parseFloat(amountInput.value) || 0;
+        const feeName = checkbox.nextElementSibling.textContent.trim();
+        const isClientPaid = row.querySelector('input[name="payed_by_client[]"]').checked;
         
-        if (margin < 10) {
-            const confirmed = confirm(
-                `⚠️ ATTENTION MARGE FAIBLE!\n\n` +
-                `Prix de vente: ${salePrice.toFixed(2)}\n` +
-                `Prix d'achat: ${costPrice.toFixed(2)}\n` +
-                `Marge: ${margin.toFixed(1)}%\n\n` +
-                `Cette marge est inférieure à 10%. Voulez-vous continuer?`
-            );
-            return confirmed;
-        } else if (margin < 0) {
-            const confirmed = confirm(
-                `❌ ATTENTION PERTE!\n\n` +
-                `Prix de vente: ${salePrice.toFixed(2)}\n` +
-                `Prix d'achat: ${costPrice.toFixed(2)}\n` +
-                `Perte: ${Math.abs(margin).toFixed(1)}%\n\n` +
-                `Ce prix génère une PERTE. Êtes-vous sûr de continuer?`
-            );
-            return confirmed;
+        if (amount > 0) {
+            totalFees += amount;
+            breakdown += `<tr>
+                <td>${feeName}</td>
+                <td style="text-align: right;">${amount.toLocaleString('fr-FR')} GNF</td>
+                <td>${isClientPaid ? '<span style="color: blue;">(Client)</span>' : ''}</td>
+            </tr>`;
         }
-    }
-    return true;
-}
-
-// Fonction pour remplir le prix personnalisé avec le prix actuel
-function fillCustomPrice() {
-  const productSelect = document.getElementById('productSelect');
-  const customPriceInput = document.getElementById('customPrice');
-
-  if (!productSelect || !customPriceInput) return;
-
-  // Get unit price from data-price
-  const selectedOption = productSelect.options[productSelect.selectedIndex];
-  const currentPrice = parseFloat(selectedOption.getAttribute('data-price')) || 0;
-  
-  // Pre-fill custom price if it's 0 or empty
-  if (parseFloat(customPriceInput.value) <= 0) {
-    customPriceInput.value = currentPrice.toFixed(2);
-  }
-  
-  updateSingleCost();
-}
-
-// FONCTION AMÉLIORÉE : Calculer le coût et afficher la marge
-function updateSingleCost() {
-  const customPriceInput = document.getElementById('customPrice');
-  const quantityInput = document.getElementById('quantity');
-  const costDisplay = document.getElementById('costDisplay');
-  const productSelect = document.getElementById('productSelect');
-
-  if (!customPriceInput || !quantityInput || !costDisplay || !productSelect) return;
-
-  const customPrice = parseFloat(customPriceInput.value) || 0;
-  const qty = parseFloat(quantityInput.value) || 0;
-  const total = customPrice * qty;
-  
-  costDisplay.value = total.toFixed(2);
-  
-  // NOUVEAU : Affichage de la marge en temps réel
-  const selectedOption = productSelect.options[productSelect.selectedIndex];
-  if (selectedOption && selectedOption.value) {
-    const salePrice = parseFloat(selectedOption.getAttribute('data-price')) || 0;
-    if (salePrice > 0 && customPrice > 0) {
-      const margin = ((salePrice - customPrice) / salePrice) * 100;
-      const profit = salePrice - customPrice;
-      
-      // Affichage visuel de la marge
-      let marginDisplay = document.getElementById('marginDisplay');
-      if (!marginDisplay) {
-        marginDisplay = document.createElement('div');
-        marginDisplay.id = 'marginDisplay';
-        marginDisplay.style.marginTop = '5px';
-        marginDisplay.style.fontSize = '12px';
-        marginDisplay.style.fontWeight = 'bold';
-        marginDisplay.style.padding = '5px';
-        marginDisplay.style.borderRadius = '3px';
-        costDisplay.parentNode.appendChild(marginDisplay);
-      }
-      
-      let bgColor = '';
-      let textColor = '';
-      let icon = '';
-      let status = '';
-      
-      if (margin < 0) {
-        bgColor = '#f8d7da';
-        textColor = '#721c24';
-        icon = '❌';
-        status = 'PERTE';
-      } else if (margin < 10) {
-        bgColor = '#fff3cd';
-        textColor = '#856404';
-        icon = '⚠️';
-        status = 'Faible';
-      } else if (margin < 20) {
-        bgColor = '#d1ecf1';
-        textColor = '#0c5460';
-        icon = '📉';
-        status = 'Correcte';
-      } else if (margin < 30) {
-        bgColor = '#d4edda';
-        textColor = '#155724';
-        icon = '📊';
-        status = 'Bonne';
-      } else {
-        bgColor = '#d4edda';
-        textColor = '#155724';
-        icon = '📈';
-        status = 'Excellente';
-      }
-      
-      marginDisplay.style.backgroundColor = bgColor;
-      marginDisplay.style.color = textColor;
-      marginDisplay.innerHTML = `
-        ${icon} Marge: ${margin.toFixed(1)}% (${status}) | 
-        Profit/unité: ${profit.toFixed(2)} | 
-        Total profit: ${(profit * qty).toFixed(2)}
-      `;
-    }
-  }
-}
-
-// Fonction pour mettre à jour le total du panier en temps réel
-function updateCartTotal() {
-  const priceInputs = document.querySelectorAll('.cart-price-input');
-  const quantityInputs = document.querySelectorAll('.cart-quantity-input');
-  const lineTotals = document.querySelectorAll('.line-total');
-  let totalCart = 0;
-  
-  // Mettre à jour chaque ligne
-  priceInputs.forEach(function(priceInput, index) {
-    const price = parseFloat(priceInput.value) || 0;
-    const qty = parseFloat(quantityInputs[index].value) || 0;
-    const lineTotal = price * qty;
-    
-    // Mettre à jour l'affichage de la ligne
-    if (lineTotals[index]) {
-      lineTotals[index].textContent = lineTotal.toFixed(2);
-    }
-    
-    totalCart += lineTotal;
-  });
-  
-  // Mettre à jour l'affichage du total
-  const totalDisplays = document.querySelectorAll('.cart-total');
-  totalDisplays.forEach(function(display) {
-    display.textContent = totalCart.toFixed(2);
-  });
-}
-
-// Fonction pour synchroniser les dates de livraison avec les dates d'arrivage
-function syncDeliveryDate() {
-    const arrivalDateInputs = document.querySelectorAll('input[name="arrivaldate"]');
-    const deliveryDateInputs = document.querySelectorAll('input[name="deliverydate"]');
-    
-    arrivalDateInputs.forEach(function(arrivalInput, index) {
-        arrivalInput.addEventListener('change', function() {
-            if (deliveryDateInputs[index] && !deliveryDateInputs[index].value) {
-                deliveryDateInputs[index].value = this.value;
-            }
-        });
     });
-}
-
-// Fonction pour valider les dates
-function validateDeliveryDates() {
-    const forms = document.querySelectorAll('form');
     
-    forms.forEach(function(form) {
-        form.addEventListener('submit', function(e) {
-            const arrivalDate = form.querySelector('input[name="arrivaldate"]');
-            const deliveryDate = form.querySelector('input[name="deliverydate"]');
-            
-            if (arrivalDate && deliveryDate && arrivalDate.value && deliveryDate.value) {
-                const arrival = new Date(arrivalDate.value);
-                const delivery = new Date(deliveryDate.value);
-                
-                if (delivery > arrival) {
-                    const daysDiff = Math.ceil((delivery - arrival) / (1000 * 60 * 60 * 24));
-                    if (daysDiff > 30) {
-                        const confirmed = confirm(
-                            `Attention: La date de livraison est ${daysDiff} jours après la date d'arrivage. ` +
-                            'Êtes-vous sûr de ces dates?'
-                        );
-                        if (!confirmed) {
-                            e.preventDefault();
-                            return false;
-                        }
-                    }
-                }
-            }
-        });
-    });
+    breakdown += `<tr style="border-top: 2px solid #333; font-weight: bold;">
+        <td>TOTAL:</td>
+        <td style="text-align: right; color: #e74c3c;">${totalFees.toLocaleString('fr-FR')} GNF</td>
+        <td></td>
+    </tr></table>`;
+    
+    document.getElementById('feesBreakdown').innerHTML = breakdown;
+    document.getElementById('feesSummary').style.display = totalFees > 0 ? 'block' : 'none';
 }
 
-// Listen for changes
+// CALCUL DES COÛTS PRODUIT
+function calculateCosts() {
+    const quantity = parseFloat(document.getElementById('quantity').value) || 0;
+    const unitPriceUSD = parseFloat(document.getElementById('unitPriceUSD').value) || 0;
+    const allocatedFees = parseFloat(document.getElementById('allocatedFees').value) || 0;
+    const margin = parseFloat(document.getElementById('suggestedMargin').value) || 0;
+    
+    // Obtenir le taux de change depuis l'importation courante
+    const exchangeRate = <?php echo $currentImport ? $currentImport['ExchangeRate'] : 12700; ?>;
+    
+    if (quantity > 0 && unitPriceUSD > 0) {
+        // Calculs
+        const totalValueUSD = unitPriceUSD * quantity;
+        const totalValueGNF = totalValueUSD * exchangeRate;
+        const costPriceUnitGNF = (unitPriceUSD * exchangeRate) + (allocatedFees / quantity);
+        const salePriceSuggested = costPriceUnitGNF * (1 + (margin / 100));
+        const totalSaleValue = salePriceSuggested * quantity;
+        const totalProfit = totalSaleValue - (totalValueGNF + allocatedFees);
+        
+        const breakdown = `
+            <table style="width: 100%; font-size: 12px;">
+                <tr><td>Prix unitaire USD:</td><td style="text-align: right; color: #2ecc71;">${unitPriceUSD.toFixed(2)}</td></tr>
+                <tr><td>Quantité:</td><td style="text-align: right;">${quantity}</td></tr>
+                <tr><td>Valeur totale USD:</td><td style="text-align: right; color: #2ecc71;">${totalValueUSD.toFixed(2)}</td></tr>
+                <tr><td>Taux de change:</td><td style="text-align: right;">${exchangeRate.toLocaleString('fr-FR')} GNF/USD</td></tr>
+                <tr><td>Valeur totale GNF:</td><td style="text-align: right; color: #e74c3c;">${totalValueGNF.toLocaleString('fr-FR')} GNF</td></tr>
+                <tr><td>Frais alloués:</td><td style="text-align: right; color: #e74c3c;">+${allocatedFees.toLocaleString('fr-FR')} GNF</td></tr>
+                <tr style="border-top: 1px solid #333; font-weight: bold;">
+                    <td>Prix de revient unitaire:</td>
+                    <td style="text-align: right; color: #e74c3c;">${costPriceUnitGNF.toLocaleString('fr-FR')} GNF</td>
+                </tr>
+                <tr><td>Marge suggérée:</td><td style="text-align: right;">${margin}%</td></tr>
+                <tr style="border-top: 1px solid #333; font-weight: bold; background: #f8f9fa;">
+                    <td>Prix de vente suggéré:</td>
+                    <td style="text-align: right; color: #007bff; font-size: 14px;">${salePriceSuggested.toLocaleString('fr-FR')} GNF</td>
+                </tr>
+                <tr><td>Valeur vente totale:</td><td style="text-align: right; color: #007bff;">${totalSaleValue.toLocaleString('fr-FR')} GNF</td></tr>
+                <tr style="background: #d4edda;"><td>Profit total estimé:</td><td style="text-align: right; color: #28a745; font-weight: bold;">${totalProfit.toLocaleString('fr-FR')} GNF</td></tr>
+            </table>
+        `;
+        
+        document.getElementById('costBreakdown').innerHTML = breakdown;
+        document.getElementById('costCalculation').style.display = 'block';
+    } else {
+        document.getElementById('costCalculation').style.display = 'none';
+    }
+}
+
+// CALCUL RAPIDE DES FRAIS
+function quickCalculateFees() {
+    const percent = parseFloat(document.getElementById('quickCalcPercent').value) || 0;
+    const totalFees = <?php echo $currentImport ? $currentImport['TotalFees'] : 0; ?>;
+    const result = (totalFees * percent) / 100;
+    
+    document.getElementById('quickCalcResult').textContent = result.toLocaleString('fr-FR') + ' GNF';
+    
+    // Mettre à jour le champ frais alloués s'il existe
+    const allocatedFeesInput = document.getElementById('allocatedFees');
+    if (allocatedFeesInput) {
+        allocatedFeesInput.value = result.toFixed(2);
+        calculateCosts();
+    }
+}
+
+// CALCUL DE MARGE DANS LE TABLEAU PRICING
+function calculateMargin(salePriceInput, costPrice) {
+    const salePrice = parseFloat(salePriceInput.value) || 0;
+    const marginPercent = salePrice > 0 ? ((salePrice - costPrice) / salePrice) * 100 : 0;
+    
+    // Trouver le champ marge correspondant dans la même ligne
+    const row = salePriceInput.closest('tr');
+    const marginInput = row.querySelector('input[name="target_margin[]"]');
+    if (marginInput) {
+        marginInput.value = marginPercent.toFixed(2);
+    }
+    
+    // Coloriser selon la marge
+    if (marginPercent < 0) {
+        salePriceInput.style.backgroundColor = '#f8d7da'; // Rouge - perte
+    } else if (marginPercent < 10) {
+        salePriceInput.style.backgroundColor = '#fff3cd'; // Jaune - faible
+    } else if (marginPercent > 30) {
+        salePriceInput.style.backgroundColor = '#d4edda'; // Vert - excellente
+    } else {
+        salePriceInput.style.backgroundColor = ''; // Normal
+    }
+}
+
+// MISE À JOUR DES INFOS PRODUIT
+function updateProductInfo() {
+    const productSelect = document.getElementById('productSelect');
+    const selectedOption = productSelect.options[productSelect.selectedIndex];
+    
+    if (selectedOption && selectedOption.value) {
+        const currentPrice = selectedOption.getAttribute('data-current-price');
+        
+        // Optionnel: pré-remplir certains champs basés sur le produit sélectionné
+        console.log('Produit sélectionné, prix actuel:', currentPrice);
+    }
+}
+
+// INITIALISATION
 document.addEventListener('DOMContentLoaded', function() {
-  // Formulaire unique
-  const productSelect = document.getElementById('productSelect');
-  if (productSelect) {
-    productSelect.addEventListener('change', fillCustomPrice);
-  }
-
-  const customPriceInput = document.getElementById('customPrice');
-  if (customPriceInput) {
-    customPriceInput.addEventListener('input', updateSingleCost);
-  }
-
-  const quantityInput = document.getElementById('quantity');
-  if (quantityInput) {
-    quantityInput.addEventListener('input', updateSingleCost);
-  }
-  
-  // Panier temporaire
-  const cartPriceInputs = document.querySelectorAll('.cart-price-input');
-  const cartQuantityInputs = document.querySelectorAll('.cart-quantity-input');
-  
-  cartPriceInputs.forEach(function(input) {
-    input.addEventListener('input', updateCartTotal);
-  });
-  
-  cartQuantityInputs.forEach(function(input) {
-    input.addEventListener('input', updateCartTotal);
-  });
-  
-  // NOUVELLES FONCTIONNALITÉS
-  syncDeliveryDate();
-  autoCompleteDeliveryNote();
-  validateDeliveryDates();
-  
-  // NOUVEAU : Vérification de marge lors de la soumission du formulaire unique
-  const singleForm = document.getElementById('singleArrivalForm');
-  if (singleForm) {
-      singleForm.addEventListener('submit', function(e) {
-          const productSelect = document.getElementById('productSelect');
-          const customPriceInput = document.getElementById('customPrice');
-          
-          if (productSelect && customPriceInput) {
-              const selectedOption = productSelect.options[productSelect.selectedIndex];
-              if (selectedOption && selectedOption.value) {
-                  const salePrice = parseFloat(selectedOption.getAttribute('data-price')) || 0;
-                  const costPrice = parseFloat(customPriceInput.value) || 0;
-                  
-                  if (!checkMarginAlert(selectedOption.value, salePrice, costPrice)) {
-                      e.preventDefault();
-                      return false;
-                  }
-              }
-          }
-      });
-  }
-  
-  // Synchroniser les dates initiales
-  const arrivalInputs = document.querySelectorAll('input[name="arrivaldate"]');
-  arrivalInputs.forEach(function(input) {
-    if (input.value) {
-      const event = new Event('change');
-      input.dispatchEvent(event);
-    }
-  });
-  
-  // NOUVEAU : Animation des lignes de marge pour attirer l'attention
-  const marginRows = document.querySelectorAll('table tbody tr');
-  marginRows.forEach(function(row) {
-    const marginBadge = row.querySelector('.label-important');
-    if (marginBadge) {
-      row.style.borderLeft = '3px solid #dc3545';
-      row.style.animation = 'pulse 2s infinite';
-    }
-  });
+    // Activer la première tab par défaut
+    showTab('imports');
+    
+    // Calculer les coûts si des valeurs sont déjà présentes
+    calculateCosts();
+    
+    // Calculer les frais si des cases sont cochées
+    calculateTotalFees();
 });
-
-// NOUVEAU : CSS pour l'animation
-const style = document.createElement('style');
-style.textContent = `
-  @keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.7; }
-    100% { opacity: 1; }
-  }
-  
-  .margin-alert {
-    border-left: 3px solid #dc3545 !important;
-    background-color: #fff5f5 !important;
-  }
-`;
-document.head.appendChild(style);
 </script>
+
 </body>
 </html>
