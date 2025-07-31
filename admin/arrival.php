@@ -366,6 +366,427 @@ $productsQuery = mysqli_query($con, "SELECT ID, ProductName, Price FROM tblprodu
             background: #007bff;
             color: white;
         }
+        
+        /* ===== NOUVEAUX STYLES MODERNES POUR LES FRAIS ===== */
+        .fees-container-modern {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .section-header-modern {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px 15px 0 0;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .section-header-modern h2 {
+            font-size: 28px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .section-header-modern p {
+            opacity: 0.9;
+            font-size: 16px;
+        }
+
+        .fees-main-content-modern {
+            background: white;
+            border-radius: 0 0 15px 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+
+        .fees-grid-modern {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .fees-selection-modern {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 12px;
+            border: 2px solid #e9ecef;
+        }
+
+        .fees-selection-modern h3 {
+            color: #495057;
+            margin-bottom: 20px;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .fee-card-modern {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            animation: fadeInUp 0.5s ease forwards;
+        }
+
+        .fee-card-modern::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.8), transparent);
+            transition: left 0.5s;
+        }
+
+        .fee-card-modern:hover::before {
+            left: 100%;
+        }
+
+        .fee-card-modern:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            border-color: #007bff;
+        }
+
+        .fee-card-modern.selected {
+            border-color: #28a745;
+            background: linear-gradient(135deg, #d4edda 0%, #f8fff9 100%);
+            box-shadow: 0 4px 15px rgba(40,167,69,0.2);
+        }
+
+        .fee-card-modern.client-paid {
+            border-color: #ffc107;
+            background: linear-gradient(135deg, #fff3cd 0%, #fffef7 100%);
+        }
+
+        .fee-checkbox-modern {
+            position: absolute;
+            opacity: 0;
+        }
+
+        .fee-header-modern {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+            cursor: pointer;
+        }
+
+        .custom-checkbox-modern {
+            width: 24px;
+            height: 24px;
+            border: 2px solid #6c757d;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .fee-checkbox-modern:checked + .fee-header-modern .custom-checkbox-modern {
+            background: #28a745;
+            border-color: #28a745;
+            transform: scale(1.1);
+        }
+
+        .fee-checkbox-modern:checked + .fee-header-modern .custom-checkbox-modern::after {
+            content: '✓';
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .fee-info-modern {
+            flex: 1;
+        }
+
+        .fee-name-modern {
+            font-weight: 600;
+            font-size: 16px;
+            color: #495057;
+            margin-bottom: 4px;
+        }
+
+        .fee-description-modern {
+            font-size: 13px;
+            color: #6c757d;
+            line-height: 1.4;
+        }
+
+        .fee-details-modern {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 15px;
+            align-items: end;
+            opacity: 0.5;
+            transition: opacity 0.3s ease;
+        }
+
+        .fee-card-modern.selected .fee-details-modern {
+            opacity: 1;
+        }
+
+        .input-group-modern {
+            position: relative;
+        }
+
+        .input-group-modern label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: #6c757d;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .amount-input-modern {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            background: #f8f9fa;
+            transition: all 0.3s ease;
+        }
+
+        .amount-input-modern:focus {
+            outline: none;
+            border-color: #007bff;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
+        }
+
+        .client-toggle-modern {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #6c757d;
+            cursor: pointer;
+        }
+
+        .toggle-switch-modern {
+            width: 40px;
+            height: 20px;
+            background: #ccc;
+            border-radius: 20px;
+            position: relative;
+            transition: background 0.3s ease;
+        }
+
+        .toggle-switch-modern::after {
+            content: '';
+            width: 16px;
+            height: 16px;
+            background: white;
+            border-radius: 50%;
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .client-checkbox-modern:checked + .client-toggle-modern .toggle-switch-modern {
+            background: #ffc107;
+        }
+
+        .client-checkbox-modern:checked + .client-toggle-modern .toggle-switch-modern::after {
+            transform: translateX(20px);
+        }
+
+        .comments-input-modern {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 13px;
+            resize: none;
+        }
+
+        .fees-summary-modern {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            padding: 25px;
+            border-radius: 12px;
+            border: 2px solid #dee2e6;
+            position: sticky;
+            top: 20px;
+        }
+
+        .fees-summary-modern h3 {
+            color: #495057;
+            margin-bottom: 20px;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .summary-item-modern {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .summary-item-modern:last-child {
+            border-bottom: none;
+            margin-top: 10px;
+            padding-top: 20px;
+            border-top: 2px solid #495057;
+        }
+
+        .summary-name-modern {
+            font-size: 14px;
+            color: #6c757d;
+        }
+
+        .summary-amount-modern {
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .summary-total-modern {
+            font-size: 18px;
+            font-weight: 700;
+            color: #dc3545;
+        }
+
+        .client-tag-modern {
+            background: #ffc107;
+            color: #856404;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .action-buttons-modern {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+
+        .btn-modern {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+        }
+
+        .btn-primary-modern {
+            background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(0,123,255,0.3);
+        }
+
+        .btn-primary-modern:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,123,255,0.4);
+        }
+
+        .btn-secondary-modern {
+            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(108,117,125,0.3);
+        }
+
+        .btn-secondary-modern:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(108,117,125,0.4);
+        }
+
+        .import-info-modern {
+            background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+            border: 2px solid #2196f3;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .import-info-modern h4 {
+            color: #1976d2;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .import-stats-modern {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-item-modern {
+            text-align: center;
+        }
+
+        .stat-value-modern {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1976d2;
+        }
+
+        .stat-label-modern {
+            font-size: 12px;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fee-card-modern:nth-child(1) { animation-delay: 0.1s; }
+        .fee-card-modern:nth-child(2) { animation-delay: 0.2s; }
+        .fee-card-modern:nth-child(3) { animation-delay: 0.3s; }
+        .fee-card-modern:nth-child(4) { animation-delay: 0.4s; }
+        .fee-card-modern:nth-child(5) { animation-delay: 0.5s; }
+
+        @media (max-width: 768px) {
+            .fees-grid-modern {
+                grid-template-columns: 1fr;
+            }
+            
+            .fee-details-modern {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+            
+            .import-stats-modern {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
     </style>
 </head>
 <body>
@@ -563,122 +984,170 @@ $productsQuery = mysqli_query($con, "SELECT ID, ProductName, Price FROM tblprodu
                 </div>
             </div>
 
-            <!-- TAB 2: GESTION DES FRAIS -->
+            <!-- TAB 2: GESTION DES FRAIS - DESIGN MODERNE -->
             <div id="tab-fees" class="tab-content">
                 <?php if ($currentImport) { ?>
-                <div class="row-fluid">
-                    <div class="span8">
-                        <div class="widget-box">
-                            <div class="widget-title">
-                                <span class="icon"><i class="icon-money"></i></span>
-                                <h5>💰 Ajouter Frais d'Importation</h5>
-                            </div>
-                            <div class="widget-content">
-                                <form method="post" id="feesForm">
-                                    <input type="hidden" name="import_id" value="<?php echo $currentImportId; ?>" />
-                                    
-                                    <div id="feesContainer">
-                                        <?php 
-                                        $feeIndex = 0;
-                                        mysqli_data_seek($feeTypesQuery, 0);
-                                        while ($feeType = mysqli_fetch_assoc($feeTypesQuery)) { 
-                                        ?>
-                                        <div class="fee-row">
-                                            <div class="row-fluid">
-                                                <div class="span4">
-                                                    <label>
-                                                        <input type="checkbox" name="fee_type_id[]" value="<?php echo $feeType['ID']; ?>" 
-                                                               onchange="toggleFeeRow(this, <?php echo $feeIndex; ?>)" />
-                                                        <strong><?php echo $feeType['FeeName']; ?></strong>
-                                                    </label>
-                                                    <small style="display: block; color: #666;"><?php echo $feeType['Description']; ?></small>
-                                                </div>
-                                                <div class="span3">
-                                                    <input type="number" name="fee_amount[]" step="0.01" min="0" 
-                                                           value="<?php echo $feeType['DefaultAmount']; ?>"
-                                                           placeholder="Montant en GNF" class="fee-amount" disabled />
-                                                </div>
-                                                <div class="span2">
-                                                    <label>
-                                                        <input type="checkbox" name="payed_by_client[]" value="<?php echo $feeIndex; ?>" 
-                                                               <?php echo $feeType['PayedByClient'] ? 'checked' : ''; ?> disabled />
-                                                        Client paie
-                                                    </label>
-                                                </div>
-                                                <div class="span3">
-                                                    <input type="text" name="fee_comments[]" placeholder="Commentaires" class="fee-comment" disabled />
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <?php 
-                                        $feeIndex++;
-                                        } 
-                                        ?>
-                                    </div>
-                                    
-                                    <div class="form-actions">
-                                        <button type="submit" name="add_import_fees" class="btn btn-success">
-                                            <i class="icon-plus"></i> Ajouter Frais Sélectionnés
-                                        </button>
-                                        <button type="button" class="btn btn-info" onclick="calculateTotalFees()">
-                                            <i class="icon-calculator"></i> Calculer Total
-                                        </button>
-                                    </div>
-                                    
-                                    <div id="feesSummary" class="cost-breakdown" style="display: none;">
-                                        <h6>💰 Résumé des Frais:</h6>
-                                        <div id="feesBreakdown"></div>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
+                <div class="fees-container-modern">
+                    <div class="section-header-modern">
+                        <h2>💰 Gestion des Frais d'Importation</h2>
+                        <p>Configurez et calculez tous les coûts liés à votre importation</p>
                     </div>
 
-                    <!-- FRAIS DÉJÀ AJOUTÉS -->
-                    <div class="span4">
-                        <div class="widget-box">
-                            <div class="widget-title">
-                                <span class="icon"><i class="icon-list-alt"></i></span>
-                                <h5>📋 Frais Enregistrés</h5>
-                            </div>
-                            <div class="widget-content">
-                                <?php
-                                $existingFeesQuery = mysqli_query($con, "
-                                    SELECT f.*, ft.FeeName 
-                                    FROM tblimportfees f 
-                                    LEFT JOIN tblimportfees_types ft ON ft.ID = f.FeeTypeID 
-                                    WHERE f.ImportationID = $currentImportId 
-                                    ORDER BY f.ID
-                                ");
-                                
-                                $totalExistingFees = 0;
-                                if (mysqli_num_rows($existingFeesQuery) > 0) {
-                                    while ($fee = mysqli_fetch_assoc($existingFeesQuery)) {
-                                        $totalExistingFees += $fee['Amount'];
-                                        ?>
-                                        <div class="fee-item" style="padding: 8px; border-bottom: 1px solid #eee;">
-                                            <strong><?php echo $fee['FeeName']; ?></strong><br>
-                                            <span class="currency-gnf"><?php echo number_format($fee['Amount'], 0); ?> GNF</span>
-                                            <?php if ($fee['PayedByClient']) { ?>
-                                                <span class="label label-info">Client</span>
-                                            <?php } ?>
-                                            <?php if ($fee['Comments']) { ?>
-                                                <br><small><?php echo $fee['Comments']; ?></small>
-                                            <?php } ?>
-                                        </div>
-                                        <?php
-                                    }
-                                    ?>
-                                    <div style="padding: 10px; background: #f8f9fa; margin-top: 10px;">
-                                        <strong>Total Frais: <span class="currency-gnf"><?php echo number_format($totalExistingFees, 0); ?> GNF</span></strong>
-                                    </div>
-                                    <?php
-                                } else {
-                                    echo '<p style="text-align: center; color: #999;">Aucun frais enregistré</p>';
-                                }
-                                ?>
+                    <div class="fees-main-content-modern">
+                        <!-- Informations sur l'importation -->
+                        <div class="import-info-modern">
+                            <h4>
+                                📋 Dossier d'Importation: <strong><?php echo $currentImport['ImportRef']; ?></strong>
+                            </h4>
+                            <div class="import-stats-modern">
+                                <div class="stat-item-modern">
+                                    <div class="stat-value-modern currency-usd">$<?php echo number_format($currentImport['TotalValueUSD'], 2); ?></div>
+                                    <div class="stat-label-modern">Valeur Facture</div>
+                                </div>
+                                <div class="stat-item-modern">
+                                    <div class="stat-value-modern"><?php echo number_format($currentImport['ExchangeRate'], 0); ?></div>
+                                    <div class="stat-label-modern">Taux GNF/USD</div>
+                                </div>
+                                <div class="stat-item-modern">
+                                    <div class="stat-value-modern currency-gnf"><?php echo number_format($currentImport['TotalValueGNF'], 0); ?></div>
+                                    <div class="stat-label-modern">Valeur GNF</div>
+                                </div>
+                                <div class="stat-item-modern">
+                                    <div class="stat-value-modern" id="totalFeesDisplay"><?php echo number_format($currentImport['TotalFees'], 0); ?></div>
+                                    <div class="stat-label-modern">Total Frais</div>
+                                </div>
                             </div>
                         </div>
+
+                        <form method="post" id="feesFormModern">
+                            <input type="hidden" name="import_id" value="<?php echo $currentImportId; ?>" />
+                            
+                            <div class="fees-grid-modern">
+                                <!-- Section de sélection des frais -->
+                                <div class="fees-selection-modern">
+                                    <h3>
+                                        🏷️ Types de Frais d'Importation
+                                    </h3>
+
+                                    <?php 
+                                    $feeIndex = 0;
+                                    mysqli_data_seek($feeTypesQuery, 0);
+                                    while ($feeType = mysqli_fetch_assoc($feeTypesQuery)) { 
+                                        $isClientPaid = $feeType['PayedByClient'] ? 'checked' : '';
+                                        $feeId = 'fee' . $feeType['ID'];
+                                        $clientId = 'client' . $feeType['ID'];
+                                    ?>
+                                    <div class="fee-card-modern" data-fee-id="<?php echo $feeType['ID']; ?>">
+                                        <input type="checkbox" id="<?php echo $feeId; ?>" class="fee-checkbox-modern" 
+                                               name="fee_type_id[]" value="<?php echo $feeType['ID']; ?>" 
+                                               onchange="updateFeeCardModern(this)">
+                                        <label for="<?php echo $feeId; ?>" class="fee-header-modern">
+                                            <div class="custom-checkbox-modern"></div>
+                                            <div class="fee-info-modern">
+                                                <div class="fee-name-modern"><?php echo $feeType['FeeName']; ?></div>
+                                                <div class="fee-description-modern"><?php echo $feeType['Description']; ?></div>
+                                            </div>
+                                        </label>
+                                        <div class="fee-details-modern">
+                                            <div class="input-group-modern">
+                                                <label>Montant (GNF)</label>
+                                                <input type="number" class="amount-input-modern" name="fee_amount[]" 
+                                                       value="<?php echo $feeType['DefaultAmount']; ?>" min="0" step="1000" 
+                                                       disabled onchange="updateSummaryModern()">
+                                            </div>
+                                            <div class="input-group-modern">
+                                                <label>Commentaires</label>
+                                                <textarea class="comments-input-modern" name="fee_comments[]" 
+                                                          placeholder="Référence..." disabled rows="2"></textarea>
+                                            </div>
+                                            <div>
+                                                <input type="checkbox" id="<?php echo $clientId; ?>" class="client-checkbox-modern" 
+                                                       name="payed_by_client[]" value="<?php echo $feeType['ID']; ?>" 
+                                                       style="display: none;" <?php echo $isClientPaid; ?>>
+                                                <label for="<?php echo $clientId; ?>" class="client-toggle-modern">
+                                                    <div class="toggle-switch-modern"></div>
+                                                    <span>Client paie</span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <?php 
+                                    $feeIndex++;
+                                    } 
+                                    ?>
+                                </div>
+
+                                <!-- Résumé des frais -->
+                                <div class="fees-summary-modern">
+                                    <h3>
+                                        📊 Résumé des Frais
+                                    </h3>
+                                    <div id="summaryContainerModern">
+                                        <div class="summary-item-modern">
+                                            <span class="summary-name-modern">Aucun frais sélectionné</span>
+                                            <span class="summary-amount-modern">0 GNF</span>
+                                        </div>
+                                    </div>
+
+                                    <!-- FRAIS DÉJÀ ENREGISTRÉS -->
+                                    <div style="margin-top: 30px;">
+                                        <h4 style="color: #495057; border-bottom: 2px solid #dee2e6; padding-bottom: 10px;">
+                                            📋 Frais Enregistrés
+                                        </h4>
+                                        <?php
+                                        $existingFeesQuery = mysqli_query($con, "
+                                            SELECT f.*, ft.FeeName 
+                                            FROM tblimportfees f 
+                                            LEFT JOIN tblimportfees_types ft ON ft.ID = f.FeeTypeID 
+                                            WHERE f.ImportationID = $currentImportId 
+                                            ORDER BY f.ID
+                                        ");
+                                        
+                                        $totalExistingFees = 0;
+                                        if (mysqli_num_rows($existingFeesQuery) > 0) {
+                                            while ($fee = mysqli_fetch_assoc($existingFeesQuery)) {
+                                                $totalExistingFees += $fee['Amount'];
+                                                ?>
+                                                <div class="summary-item-modern" style="background: #e8f5e8; border-radius: 6px; padding: 8px; margin: 5px 0;">
+                                                    <span class="summary-name-modern">
+                                                        <?php echo $fee['FeeName']; ?>
+                                                        <?php if ($fee['PayedByClient']) { ?>
+                                                            <span class="client-tag-modern">CLIENT</span>
+                                                        <?php } ?>
+                                                    </span>
+                                                    <span class="summary-amount-modern currency-gnf"><?php echo number_format($fee['Amount'], 0); ?></span>
+                                                </div>
+                                                <?php if ($fee['Comments']) { ?>
+                                                    <div style="font-size: 11px; color: #6c757d; margin-left: 10px; margin-bottom: 8px;">
+                                                        💬 <?php echo $fee['Comments']; ?>
+                                                    </div>
+                                                <?php } ?>
+                                                <?php
+                                            }
+                                            ?>
+                                            <div class="summary-item-modern" style="background: #d4edda; border-radius: 6px; padding: 10px; font-weight: bold;">
+                                                <span class="summary-name-modern">TOTAL ENREGISTRÉ</span>
+                                                <span class="summary-amount-modern currency-gnf"><?php echo number_format($totalExistingFees, 0); ?> GNF</span>
+                                            </div>
+                                            <?php
+                                        } else {
+                                            echo '<p style="text-align: center; color: #999; font-style: italic; padding: 20px;">Aucun frais enregistré</p>';
+                                        }
+                                        ?>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Boutons d'action -->
+                            <div class="action-buttons-modern">
+                                <button type="button" class="btn-modern btn-secondary-modern" onclick="resetFormModern()">
+                                    🔄 Réinitialiser
+                                </button>
+                                <button type="submit" name="add_import_fees" class="btn-modern btn-primary-modern">
+                                    💾 Enregistrer les Frais
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
                 <?php } else { ?>
