@@ -1,9 +1,6 @@
 <?php
 session_start();
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
 error_reporting(0);
-
 include('includes/dbconnection.php');
 
 if (strlen($_SESSION['imsaid'] == 0)) {
@@ -104,7 +101,6 @@ if (isset($_POST['submit'])) {
   $amount      = floatval($_POST['amount']);
   $comments    = mysqli_real_escape_string($con, $_POST['comments']);
   $paymentMode = mysqli_real_escape_string($con, $_POST['paymentmode']);
-  $importationID = isset($_POST['importation_id']) ? intval($_POST['importation_id']) : null;
 
   if ($supplierID <= 0 || $amount <= 0) {
     $paymentError = 'Données invalides';
@@ -118,12 +114,10 @@ if (isset($_POST['submit'])) {
     mysqli_begin_transaction($con);
     
     try {
-      // 2) Enregistrer le paiement fournisseur avec lien optionnel vers importation
-      $importClause = $importationID ? ", ImportationID = $importationID" : "";
+      // 2) Enregistrer le paiement fournisseur
       $sqlPayment = "
-        INSERT INTO tblsupplierpayments(SupplierID, PaymentDate, Amount, Comments, PaymentMode $importClause)
-        VALUES('$supplierID', '$payDate', '$amount', '$comments', '$paymentMode'" . 
-        ($importationID ? ", $importationID" : "") . ")
+        INSERT INTO tblsupplierpayments(SupplierID, PaymentDate, Amount, Comments, PaymentMode)
+        VALUES('$supplierID', '$payDate', '$amount', '$comments', '$paymentMode')
       ";
       $resPayment = mysqli_query($con, $sqlPayment);
       
@@ -142,14 +136,6 @@ if (isset($_POST['submit'])) {
       
       // 5) Enregistrer la transaction de caisse (OUT)
       $cashComment = "Paiement fournisseur: " . $supplierName;
-      if ($importationID) {
-        // Récupérer la référence d'importation
-        $importRefQuery = mysqli_query($con, "SELECT ImportRef FROM tblimportations WHERE ID = $importationID");
-        if ($importRefQuery && mysqli_num_rows($importRefQuery) > 0) {
-          $importRef = mysqli_fetch_assoc($importRefQuery)['ImportRef'];
-          $cashComment .= " (Import: $importRef)";
-        }
-      }
       if (!empty($comments)) {
         $cashComment .= " - " . $comments;
       }
@@ -186,108 +172,62 @@ if (isset($_POST['submit'])) {
 }
 
 // ==========================
-// 3) Filtre pour afficher le total pour un fournisseur - AMÉLIORÉ AVEC IMPORTATIONS
+// 3) Filtre pour afficher le total pour un fournisseur
 // ==========================
 $selectedSupplier = 0;
 $totalArrivals = 0;
-$totalImportations = 0;
-$totalPaid = 0;
-$totalDue = 0;
-$supplierImportations = [];
-$supplierArrivals = [];
+$totalPaid     = 0;
+$totalDue      = 0;
 
 if (isset($_GET['supplierSearch'])) {
   $selectedSupplier = intval($_GET['supplierSearch']);
 
   if ($selectedSupplier > 0) {
-    // *** NOUVEAU : Calculer le total des importations (coût complet avec frais) ***
-    $sqlImportations = "
-      SELECT 
-        i.ID as ImportID,
-        i.ImportRef,
-        i.BLNumber,
-        i.ImportDate,
-        i.TotalValueUSD,
-        i.ExchangeRate,
-        i.TotalValueGNF,
-        i.TotalFees,
-        i.TotalCostGNF,
-        i.Status,
-        i.Description,
-        COALESCE(SUM(sp.Amount), 0) as PaidAmount,
-        (i.TotalCostGNF - COALESCE(SUM(sp.Amount), 0)) as RemainingAmount
-      FROM tblimportations i
-      LEFT JOIN tblsupplierpayments sp ON sp.SupplierID = i.SupplierID AND sp.ImportationID = i.ID
-      WHERE i.SupplierID = '$selectedSupplier'
-      GROUP BY i.ID
-      ORDER BY i.ImportDate DESC, i.ID DESC
-    ";
-    $resImportations = mysqli_query($con, $sqlImportations);
-    
-    $totalImportationsCost = 0;
-    $totalImportationsPaid = 0;
-    while ($imp = mysqli_fetch_assoc($resImportations)) {
-      $supplierImportations[] = $imp;
-      $totalImportationsCost += floatval($imp['TotalCostGNF']);
-      $totalImportationsPaid += floatval($imp['PaidAmount']);
-    }
-    
-    // *** Calculer aussi les arrivages anciens (sans importation) ***
-    $sqlArrivalsOld = "
-      SELECT COALESCE(SUM(Cost), 0) as sumArrivals
+    // Calculer la somme des arrivages
+    $sqlArr = "
+      SELECT IFNULL(SUM(Cost),0) as sumArrivals
       FROM tblproductarrivals
-      WHERE SupplierID = '$selectedSupplier' 
-        AND (ImportationID IS NULL OR ImportationID = 0)
+      WHERE SupplierID='$selectedSupplier'
     ";
-    $resArrivalsOld = mysqli_query($con, $sqlArrivalsOld);
-    $rowArrivalsOld = mysqli_fetch_assoc($resArrivalsOld);
-    $totalArrivalsOld = floatval($rowArrivalsOld['sumArrivals']);
+    $resArr = mysqli_query($con, $sqlArr);
+    $rowArr = mysqli_fetch_assoc($resArr);
+    $totalArrivals = floatval($rowArr['sumArrivals']);
 
-    // *** Calculer la somme des paiements généraux (sans importation spécifique) ***
-    $sqlPayGeneral = "
-      SELECT COALESCE(SUM(Amount), 0) as sumPaid
+    // Calculer la somme des paiements
+    $sqlPay = "
+      SELECT IFNULL(SUM(Amount),0) as sumPaid
       FROM tblsupplierpayments
-      WHERE SupplierID = '$selectedSupplier'
-        AND (ImportationID IS NULL OR ImportationID = 0)
+      WHERE SupplierID='$selectedSupplier'
     ";
-    $resPayGeneral = mysqli_query($con, $sqlPayGeneral);
-    $rowPayGeneral = mysqli_fetch_assoc($resPayGeneral);
-    $totalPaidGeneral = floatval($rowPayGeneral['sumPaid']);
+    $resPay = mysqli_query($con, $sqlPay);
+    $rowPay = mysqli_fetch_assoc($resPay);
+    $totalPaid = floatval($rowPay['sumPaid']);
 
-    // *** Totaux finaux ***
-    $totalImportations = $totalImportationsCost;
-    $totalArrivals = $totalArrivalsOld; // Arrivages anciens seulement
-    $totalPaid = $totalImportationsPaid + $totalPaidGeneral;
-    $totalDue = ($totalImportations + $totalArrivals) - $totalPaid;
+    // Solde
+    $totalDue = $totalArrivals - $totalPaid;
     if ($totalDue < 0) $totalDue = 0;
     
-    // *** Récupérer les détails des arrivages anciens ***
-    if ($totalArrivalsOld > 0) {
-      $sqlArrivalsDetails = "
-        SELECT 
-          a.ID as arrivalID,
-          a.ArrivalDate,
-          a.Quantity,
-          a.Cost,
-          a.Comments,
-          p.ProductName,
-          p.Price as UnitPrice
-        FROM tblproductarrivals a
-        LEFT JOIN tblproducts p ON p.ID = a.ProductID
-        WHERE a.SupplierID = '$selectedSupplier'
-          AND (a.ImportationID IS NULL OR a.ImportationID = 0)
-        ORDER BY a.ArrivalDate DESC, a.ID DESC
-      ";
-      $resArrivalsDetails = mysqli_query($con, $sqlArrivalsDetails);
-      while ($arr = mysqli_fetch_assoc($resArrivalsDetails)) {
-        $supplierArrivals[] = $arr;
-      }
-    }
+    // Récupérer les détails des arrivages pour ce fournisseur
+    $sqlArrivals = "
+      SELECT 
+        a.ID as arrivalID,
+        a.ArrivalDate,
+        a.Quantity,
+        a.Cost,
+        a.Comments,
+        p.ProductName,
+        p.Price as UnitPrice
+      FROM tblproductarrivals a
+      LEFT JOIN tblproducts p ON p.ID = a.ProductID
+      WHERE a.SupplierID = '$selectedSupplier'
+      ORDER BY a.ArrivalDate DESC, a.ID DESC
+    ";
+    $resArrivals = mysqli_query($con, $sqlArrivals);
   }
 }
 
 // ==========================
-// 4) Liste des paiements - AMÉLIORÉE AVEC IMPORTATIONS
+// 4) Liste des paiements
 // ==========================
 $sqlList = "
   SELECT sp.ID as paymentID,
@@ -295,29 +235,18 @@ $sqlList = "
          sp.Amount,
          sp.Comments,
          sp.PaymentMode,
-         sp.ImportationID,
-         s.SupplierName,
-         i.ImportRef,
-         i.BLNumber
+         s.SupplierName
   FROM tblsupplierpayments sp
   LEFT JOIN tblsupplier s ON s.ID = sp.SupplierID
-  LEFT JOIN tblimportations i ON i.ID = sp.ImportationID
   ORDER BY sp.ID DESC
   LIMIT 100
 ";
 $resList = mysqli_query($con, $sqlList);
-
-// Ajouter la colonne ImportationID à tblsupplierpayments si elle n'existe pas
-$checkColumn = mysqli_query($con, "SHOW COLUMNS FROM tblsupplierpayments LIKE 'ImportationID'");
-if (mysqli_num_rows($checkColumn) == 0) {
-  mysqli_query($con, "ALTER TABLE tblsupplierpayments ADD COLUMN ImportationID int(11) DEFAULT NULL AFTER PaymentMode");
-  mysqli_query($con, "ALTER TABLE tblsupplierpayments ADD KEY ImportationID (ImportationID)");
-}
 ?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <title>Paiements Fournisseurs - Gestion Importations</title>
+  <title>Paiements Fournisseurs</title>
   <?php include_once('includes/cs.php'); ?>
   <?php include_once('includes/responsive.php'); ?>
   <style>
@@ -339,7 +268,7 @@ if (mysqli_num_rows($checkColumn) == 0) {
       font-weight: bold;
       color: #d9534f;
     }
-    .importations-table, .arrivals-table {
+    .arrivals-table {
       margin-top: 15px;
     }
     .supplier-details {
@@ -370,65 +299,6 @@ if (mysqli_num_rows($checkColumn) == 0) {
       color: #888;
       font-style: italic;
     }
-    .importation-card {
-      border: 1px solid #ddd;
-      border-radius: 5px;
-      padding: 15px;
-      margin-bottom: 15px;
-      background: #f8f9fa;
-    }
-    .currency-usd {
-      color: #2ecc71;
-      font-weight: bold;
-    }
-    .currency-gnf {
-      color: #e74c3c;
-      font-weight: bold;
-    }
-    .import-status-en_cours { color: #007bff; }
-    .import-status-termine { color: #28a745; }
-    .import-status-annule { color: #dc3545; }
-    .remaining-amount {
-      font-size: 14px;
-      font-weight: bold;
-    }
-    .remaining-amount.zero { color: #28a745; }
-    .remaining-amount.partial { color: #ffc107; }
-    .remaining-amount.unpaid { color: #dc3545; }
-    .tabs-container {
-      margin: 20px 0;
-    }
-    .nav-tabs {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-      border-bottom: 2px solid #ddd;
-    }
-    .nav-tabs li {
-      display: inline-block;
-      margin-right: 5px;
-    }
-    .nav-tabs li a {
-      display: block;
-      padding: 10px 15px;
-      background: #f8f9fa;
-      color: #333;
-      text-decoration: none;
-      border: 1px solid #ddd;
-      border-bottom: none;
-      border-radius: 5px 5px 0 0;
-    }
-    .nav-tabs li.active a {
-      background: #007bff;
-      color: white;
-    }
-    .tab-content {
-      display: none;
-      padding: 20px 0;
-    }
-    .tab-content.active {
-      display: block;
-    }
   </style>
 </head>
 <body>
@@ -437,11 +307,7 @@ if (mysqli_num_rows($checkColumn) == 0) {
 
 <div id="content">
   <div id="content-header">
-    <div id="breadcrumb">
-      <a href="dashboard.php" class="tip-bottom"><i class="icon-home"></i> Accueil</a>
-      <a href="supplier-payments.php" class="current">Paiements Fournisseurs</a>
-    </div>
-    <h1>💰 Paiements aux Fournisseurs - Gestion Importations</h1>
+    <h1>Paiements aux Fournisseurs</h1>
   </div>
   <div class="container-fluid">
     <hr>
@@ -452,10 +318,10 @@ if (mysqli_num_rows($checkColumn) == 0) {
         <div class="cash-balance <?php echo ($availableCash <= 0) ? 'insufficient' : ''; ?>">
           <div class="row-fluid">
             <div class="span6">
-              <h4><i class="icon-money"></i> Solde disponible en caisse:</h4>
-              <span class="cash-balance-amount"><?php echo number_format($availableCash, 2); ?> GNF</span>
+              <h4>Solde disponible en caisse:</h4>
+              <span class="cash-balance-amount"><?php echo number_format($availableCash, 2); ?></span>
               <?php if ($availableCash <= 0): ?>
-                <p><strong>⚠️ Attention:</strong> Solde insuffisant pour effectuer des paiements.</p>
+                <p><strong>Attention:</strong> Solde insuffisant pour effectuer des paiements.</p>
               <?php endif; ?>
               
               <?php if ($todayCustomerPaymentsAll > $todayCustomerPayments): ?>
@@ -468,7 +334,7 @@ if (mysqli_num_rows($checkColumn) == 0) {
             </div>
             <div class="span6">
               <div class="transaction-history">
-                <p><strong>📊 Détail du jour:</strong></p>
+                <p><strong>Détail du jour:</strong></p>
                 <ul>
                   <li>Ventes régulières: +<?php echo number_format($todayRegularSales, 2); ?></li>
                   <li>Paiements clients en espèces: +<?php echo number_format($todayCustomerPayments, 2); ?></li>
@@ -496,7 +362,7 @@ if (mysqli_num_rows($checkColumn) == 0) {
     <div class="row-fluid">
       <div class="span12">
         <form method="get" action="supplier-payments.php" class="form-inline">
-          <label><i class="icon-search"></i> Choisir un fournisseur :</label>
+          <label>Choisir un fournisseur :</label>
           <select name="supplierSearch" required>
             <option value="">-- Tous --</option>
             <?php
@@ -510,9 +376,7 @@ if (mysqli_num_rows($checkColumn) == 0) {
             }
             ?>
           </select>
-          <button type="submit" class="btn btn-info">
-            <i class="icon-calculator"></i> Voir le total
-          </button>
+          <button type="submit" class="btn btn-info">Voir le total</button>
         </form>
         <hr>
 
@@ -529,7 +393,7 @@ if (mysqli_num_rows($checkColumn) == 0) {
         ?>
           <div class="supplier-details">
             <div class="summary-box">
-              <h4><i class="icon-building"></i> Fournisseur : <strong><?php echo $supplierName; ?></strong></h4>
+              <h4>Fournisseur : <strong><?php echo $supplierName; ?></strong></h4>
               <?php if(!empty($supplierPhone) || !empty($supplierEmail) || !empty($supplierAddress)): ?>
               <div class="row-fluid">
                 <div class="span4">
@@ -552,30 +416,27 @@ if (mysqli_num_rows($checkColumn) == 0) {
               <?php endif; ?>
               
               <div class="row-fluid">
-                <div class="span3">
-                  <p><strong>🚢 Importations:</strong> <br><span class="currency-gnf"><?php echo number_format($totalImportations, 0); ?> GNF</span></p>
+                <div class="span4">
+                  <p>Total des arrivages : <strong><?php echo number_format($totalArrivals, 2); ?></strong></p>
                 </div>
-                <div class="span3">
-                  <p><strong>📦 Arrivages anciens:</strong> <br><span class="currency-gnf"><?php echo number_format($totalArrivals, 0); ?> GNF</span></p>
+                <div class="span4">
+                  <p>Total payé : <strong><?php echo number_format($totalPaid, 2); ?></strong></p>
                 </div>
-                <div class="span3">
-                  <p><strong>💰 Total payé:</strong> <br><span class="currency-gnf"><?php echo number_format($totalPaid, 0); ?> GNF</span></p>
-                </div>
-                <div class="span3">
-                  <p class="balance-due"><strong>⚠️ Solde dû:</strong> <br><span class="currency-gnf"><?php echo number_format($totalDue, 0); ?> GNF</span></p>
+                <div class="span4">
+                  <p class="balance-due">Solde dû : <strong><?php echo number_format($totalDue, 2); ?></strong></p>
                   
                   <?php if ($totalDue > 0): ?>
                     <?php if ($availableCash <= 0): ?>
                       <div class="alert alert-error">
-                        <strong>❌ Impossible de payer !</strong> Solde en caisse insuffisant.
+                        <strong>Impossible de payer !</strong> Solde en caisse insuffisant.
                       </div>
                     <?php elseif ($availableCash < $totalDue): ?>
                       <div class="alert alert-warning">
-                        <strong>⚠️ Attention !</strong> Solde en caisse (<?php echo number_format($availableCash, 2); ?>) inférieur au montant dû.
+                        <strong>Attention !</strong> Solde en caisse (<?php echo number_format($availableCash, 2); ?>) inférieur au montant dû.
                       </div>
                     <?php else: ?>
                       <div class="alert alert-success">
-                        <strong>✅ OK !</strong> Solde en caisse suffisant pour payer ce fournisseur.
+                        <strong>OK !</strong> Solde en caisse suffisant pour payer ce fournisseur.
                       </div>
                     <?php endif; ?>
                   <?php endif; ?>
@@ -583,118 +444,54 @@ if (mysqli_num_rows($checkColumn) == 0) {
               </div>
             </div>
             
-            <!-- ONGLETS POUR DÉTAILS -->
-            <div class="tabs-container">
-              <ul class="nav-tabs">
-                <li class="active">
-                  <a href="#tab-importations" onclick="showTab('importations')">
-                    🚢 Importations (<?php echo count($supplierImportations); ?>)
-                  </a>
-                </li>
-                <?php if (count($supplierArrivals) > 0): ?>
-                <li>
-                  <a href="#tab-arrivals" onclick="showTab('arrivals')">
-                    📦 Arrivages Anciens (<?php echo count($supplierArrivals); ?>)
-                  </a>
-                </li>
-                <?php endif; ?>
-              </ul>
-
-              <!-- TAB 1: IMPORTATIONS -->
-              <div id="tab-importations" class="tab-content active">
-                <?php if (count($supplierImportations) > 0): ?>
-                  <?php foreach ($supplierImportations as $imp): ?>
-                  <div class="importation-card">
-                    <div class="row-fluid">
-                      <div class="span8">
-                        <h5>
-                          <i class="icon-folder-open"></i> 
-                          <strong><?php echo $imp['ImportRef']; ?></strong>
-                          <span class="label import-status-<?php echo $imp['Status']; ?>">
-                            <?php echo strtoupper($imp['Status']); ?>
-                          </span>
-                        </h5>
-                        <p><strong>BL:</strong> <?php echo $imp['BLNumber']; ?> | 
-                           <strong>Date:</strong> <?php echo date('d/m/Y', strtotime($imp['ImportDate'])); ?></p>
-                        <p><small><?php echo $imp['Description']; ?></small></p>
-                      </div>
-                      <div class="span4" style="text-align: right;">
-                        <p><strong>Valeur:</strong> <span class="currency-usd">$<?php echo number_format($imp['TotalValueUSD'], 2); ?></span></p>
-                        <p><strong>+ Frais:</strong> <span class="currency-gnf"><?php echo number_format($imp['TotalFees'], 0); ?> GNF</span></p>
-                        <p><strong>Total:</strong> <span class="currency-gnf"><?php echo number_format($imp['TotalCostGNF'], 0); ?> GNF</span></p>
-                        <p><strong>Payé:</strong> <span class="currency-gnf"><?php echo number_format($imp['PaidAmount'], 0); ?> GNF</span></p>
-                        
-                        <?php 
-                        $remaining = floatval($imp['RemainingAmount']);
-                        $remainingClass = 'unpaid';
-                        if ($remaining == 0) $remainingClass = 'zero';
-                        elseif ($remaining < floatval($imp['TotalCostGNF'])) $remainingClass = 'partial';
-                        ?>
-                        <p class="remaining-amount <?php echo $remainingClass; ?>">
-                          <strong>Reste:</strong> <?php echo number_format($remaining, 0); ?> GNF
-                        </p>
-                        
-                        <?php if ($remaining > 0): ?>
-                        <button type="button" class="btn btn-mini btn-primary" 
-                                onclick="selectImportationForPayment(<?php echo $imp['ImportID']; ?>, '<?php echo $imp['ImportRef']; ?>', <?php echo $remaining; ?>)">
-                          <i class="icon-credit-card"></i> Payer
-                        </button>
-                        <?php endif; ?>
-                      </div>
-                    </div>
-                  </div>
-                  <?php endforeach; ?>
-                <?php else: ?>
-                  <div class="alert alert-info">
-                    <strong>ℹ️ Info!</strong> Aucune importation trouvée pour ce fournisseur.
-                  </div>
-                <?php endif; ?>
+            <!-- Affichage des détails d'arrivages pour ce fournisseur -->
+            <?php if (isset($resArrivals) && mysqli_num_rows($resArrivals) > 0): ?>
+            <div class="widget-box">
+              <div class="widget-title">
+                <span class="icon"><i class="icon-truck"></i></span>
+                <h5>Détails des Arrivages</h5>
               </div>
-
-              <!-- TAB 2: ARRIVAGES ANCIENS -->
-              <div id="tab-arrivals" class="tab-content">
-                <?php if (count($supplierArrivals) > 0): ?>
-                <div class="widget-box">
-                  <div class="widget-title">
-                    <span class="icon"><i class="icon-truck"></i></span>
-                    <h5>📦 Détails des Arrivages Anciens (Sans Importation)</h5>
-                  </div>
-                  <div class="widget-content nopadding">
-                    <table class="table table-bordered table-striped arrivals-table">
-                      <thead>
-                        <tr>
-                          <th>ID</th>
-                          <th>Date d'Arrivage</th>
-                          <th>Produit</th>
-                          <th>Quantité</th>
-                          <th>Prix Unitaire</th>
-                          <th>Coût Total</th>
-                          <th>Commentaires</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <?php foreach ($supplierArrivals as $arrival): ?>
-                        <tr>
-                          <td><?php echo $arrival['arrivalID']; ?></td>
-                          <td><?php echo $arrival['ArrivalDate']; ?></td>
-                          <td><?php echo $arrival['ProductName']; ?></td>
-                          <td><?php echo $arrival['Quantity']; ?></td>
-                          <td><?php echo number_format($arrival['UnitPrice'], 2); ?></td>
-                          <td class="currency-gnf"><?php echo number_format($arrival['Cost'], 2); ?></td>
-                          <td><?php echo $arrival['Comments']; ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                <?php else: ?>
-                  <div class="alert alert-info">
-                    <strong>ℹ️ Info!</strong> Aucun arrivage ancien trouvé pour ce fournisseur.
-                  </div>
-                <?php endif; ?>
+              <div class="widget-content nopadding">
+                <table class="table table-bordered table-striped arrivals-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Date d'Arrivage</th>
+                      <th>Produit</th>
+                      <th>Quantité</th>
+                      <th>Prix Unitaire</th>
+                      <th>Coût Total</th>
+                      <th>Commentaires</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <?php
+                    while ($arrival = mysqli_fetch_assoc($resArrivals)) {
+                      ?>
+                      <tr>
+                        <td><?php echo $arrival['arrivalID']; ?></td>
+                        <td><?php echo $arrival['ArrivalDate']; ?></td>
+                        <td><?php echo $arrival['ProductName']; ?></td>
+                        <td><?php echo $arrival['Quantity']; ?></td>
+                        <td><?php echo number_format($arrival['UnitPrice'], 2); ?></td>
+                        <td><?php echo number_format($arrival['Cost'], 2); ?></td>
+                        <td><?php echo $arrival['Comments']; ?></td>
+                      </tr>
+                    <?php
+                    }
+                    ?>
+                  </tbody>
+                </table>
               </div>
             </div>
+            <?php else: ?>
+              <?php if ($selectedSupplier > 0): ?>
+                <div class="alert alert-info">
+                  <button class="close" data-dismiss="alert">×</button>
+                  <strong>Info!</strong> Aucun arrivage trouvé pour ce fournisseur.
+                </div>
+              <?php endif; ?>
+            <?php endif; ?>
           </div>
         <?php
         }
@@ -704,20 +501,20 @@ if (mysqli_num_rows($checkColumn) == 0) {
 
     <hr>
 
-    <!-- ========== FORMULAIRE d'ajout de paiement - AMÉLIORÉ ========== -->
+    <!-- ========== FORMULAIRE d'ajout de paiement ========== -->
     <div class="row-fluid">
       <div class="span12">
         <div class="widget-box">
           <div class="widget-title">
             <span class="icon"><i class="icon-money"></i></span>
-            <h5>💳 Enregistrer un paiement</h5>
+            <h5>Enregistrer un paiement</h5>
           </div>
           <div class="widget-content nopadding">
-            <form method="post" class="form-horizontal" id="paymentForm">
+            <form method="post" class="form-horizontal">
               <div class="control-group">
                 <label class="control-label">Fournisseur :</label>
                 <div class="controls">
-                  <select name="supplierid" id="supplierid" required onchange="loadSupplierImportations()">
+                  <select name="supplierid" id="supplierid" required>
                     <option value="">-- Choisir --</option>
                     <?php
                     // Recharger la liste
@@ -730,17 +527,6 @@ if (mysqli_num_rows($checkColumn) == 0) {
                   </select>
                 </div>
               </div>
-              
-              <div class="control-group" id="importation-group" style="display: none;">
-                <label class="control-label">Importation (optionnel) :</label>
-                <div class="controls">
-                  <select name="importation_id" id="importationSelect">
-                    <option value="">-- Paiement général --</option>
-                  </select>
-                  <span class="help-inline">Laisser vide pour un paiement général</span>
-                </div>
-              </div>
-              
               <div class="control-group">
                 <label class="control-label">Date de paiement :</label>
                 <div class="controls">
@@ -751,31 +537,24 @@ if (mysqli_num_rows($checkColumn) == 0) {
                 <label class="control-label">Montant :</label>
                 <div class="controls">
                   <input type="number" name="amount" id="amount" step="any" min="0.01" required />
-                  <div id="amount-suggestions" style="margin-top: 5px;">
-                    <?php if ($selectedSupplier > 0 && $totalDue > 0): ?>
-                      <a href="#" onclick="setAmount(<?php echo $totalDue; ?>); return false;" class="btn btn-mini btn-info">
-                        Montant total dû (<?php echo number_format($totalDue, 2); ?>)
-                      </a>
+                  <?php if ($selectedSupplier > 0 && $totalDue > 0): ?>
+                    <span class="help-inline">
+                      <a href="#" onclick="setAmount(<?php echo $totalDue; ?>); return false;" class="btn btn-mini btn-info">Montant dû (<?php echo number_format($totalDue, 2); ?>)</a>
                       <?php if ($availableCash > 0 && $availableCash < $totalDue): ?>
-                        <a href="#" onclick="setAmount(<?php echo $availableCash; ?>); return false;" class="btn btn-mini btn-warning">
-                          Solde disponible (<?php echo number_format($availableCash, 2); ?>)
-                        </a>
+                        <a href="#" onclick="setAmount(<?php echo $availableCash; ?>); return false;" class="btn btn-mini btn-warning">Solde disponible (<?php echo number_format($availableCash, 2); ?>)</a>
                       <?php endif; ?>
-                    <?php endif; ?>
-                  </div>
+                    </span>
+                  <?php endif; ?>
                 </div>
               </div>
               <div class="control-group">
                 <label class="control-label">Mode de paiement :</label>
                 <div class="controls">
                   <label class="radio inline">
-                    <input type="radio" name="paymentmode" value="espece" checked /> 💵 Espèce
+                    <input type="radio" name="paymentmode" value="espece" checked /> Espèce
                   </label>
                   <label class="radio inline">
-                    <input type="radio" name="paymentmode" value="carte" /> 💳 Carte
-                  </label>
-                  <label class="radio inline">
-                    <input type="radio" name="paymentmode" value="virement" /> 🏦 Virement
+                    <input type="radio" name="paymentmode" value="carte" /> Carte
                   </label>
                 </div>
               </div>
@@ -787,7 +566,7 @@ if (mysqli_num_rows($checkColumn) == 0) {
               </div>
               <div class="form-actions">
                 <button type="submit" name="submit" class="btn btn-success" <?php echo ($availableCash <= 0) ? 'disabled' : ''; ?>>
-                  <i class="icon-check"></i> 💳 Enregistrer et déduire de la caisse
+                  <i class="icon-check"></i> Enregistrer et déduire de la caisse
                 </button>
                 <?php if ($availableCash <= 0): ?>
                   <span class="help-inline text-error">Impossible d'effectuer des paiements: solde en caisse insuffisant</span>
@@ -801,22 +580,21 @@ if (mysqli_num_rows($checkColumn) == 0) {
 
     <hr>
 
-    <!-- ========== LISTE DES PAIEMENTS - AMÉLIORÉE ========== -->
+    <!-- ========== LISTE DES PAIEMENTS ========== -->
     <div class="row-fluid">
       <div class="span12">
         <div class="widget-box">
           <div class="widget-title">
             <span class="icon"><i class="icon-th"></i></span>
-            <h5>📋 Liste des Paiements Récents</h5>
+            <h5>Liste des Paiements</h5>
           </div>
           <div class="widget-content nopadding">
-            <table class="table table-bordered data-table">
+            <table class="table table-bordered">
               <thead>
                 <tr>
                   <th>#</th>
                   <th>Date</th>
                   <th>Fournisseur</th>
-                  <th>Importation</th>
                   <th>Montant</th>
                   <th>Mode</th>
                   <th>Commentaires</th>
@@ -829,26 +607,14 @@ if (mysqli_num_rows($checkColumn) == 0) {
                   ?>
                   <tr>
                     <td><?php echo $cnt; ?></td>
-                    <td><?php echo date('d/m/Y', strtotime($row['PaymentDate'])); ?></td>
+                    <td><?php echo $row['PaymentDate']; ?></td>
                     <td><?php echo $row['SupplierName']; ?></td>
-                    <td>
-                      <?php if ($row['ImportationID']): ?>
-                        <span class="label label-info">
-                          <i class="icon-folder-open"></i> <?php echo $row['ImportRef']; ?>
-                        </span><br>
-                        <small><?php echo $row['BLNumber']; ?></small>
-                      <?php else: ?>
-                        <span class="text-muted">Paiement général</span>
-                      <?php endif; ?>
-                    </td>
-                    <td class="currency-gnf"><?php echo number_format($row['Amount'],2); ?></td>
+                    <td><?php echo number_format($row['Amount'],2); ?></td>
                     <td><?php 
                       if($row['PaymentMode'] == 'espece') {
-                        echo '<span class="label label-success">💵 Espèce</span>';
+                        echo '<span class="label label-success">Espèce</span>';
                       } else if($row['PaymentMode'] == 'carte') {
-                        echo '<span class="label label-info">💳 Carte</span>';
-                      } else if($row['PaymentMode'] == 'virement') {
-                        echo '<span class="label label-warning">🏦 Virement</span>';
+                        echo '<span class="label label-info">Carte</span>';
                       } else {
                         echo '<span class="label">Non spécifié</span>';
                       }
@@ -880,80 +646,9 @@ function setAmount(amount) {
   document.getElementById('amount').value = amount;
 }
 
-// Fonction pour sélectionner une importation pour paiement
-function selectImportationForPayment(importId, importRef, remainingAmount) {
-  // Sélectionner l'importation
-  document.getElementById('importationSelect').value = importId;
-  
-  // Définir le montant restant
-  setAmount(remainingAmount);
-  
-  // Faire défiler vers le formulaire
-  document.getElementById('paymentForm').scrollIntoView({behavior: 'smooth'});
-  
-  // Mettre en évidence le formulaire
-  var form = document.getElementById('paymentForm').parentElement;
-  form.style.border = '2px solid #007bff';
-  setTimeout(function() {
-    form.style.border = '';
-  }, 3000);
-}
-
-// Charger les importations d'un fournisseur
-function loadSupplierImportations() {
-  var supplierId = document.getElementById('supplierid').value;
-  var importationGroup = document.getElementById('importation-group');
-  var importationSelect = document.getElementById('importationSelect');
-  
-  if (supplierId) {
-    // Afficher le groupe
-    importationGroup.style.display = 'block';
-    
-    // Charger les importations via AJAX (simulation)
-    // En réalité, vous devriez faire un appel AJAX ici
-    // Pour l'instant, on va juste réinitialiser
-    importationSelect.innerHTML = '<option value="">-- Paiement général --</option>';
-    
-    // Simulation de chargement des importations du fournisseur sélectionné
-    <?php if ($selectedSupplier > 0): ?>
-    if (supplierId == <?php echo $selectedSupplier; ?>) {
-      <?php foreach ($supplierImportations as $imp): ?>
-      <?php if (floatval($imp['RemainingAmount']) > 0): ?>
-      var option = document.createElement('option');
-      option.value = <?php echo $imp['ImportID']; ?>;
-      option.text = '<?php echo $imp['ImportRef']; ?> (Reste: <?php echo number_format($imp['RemainingAmount'], 0); ?>)';
-      importationSelect.appendChild(option);
-      <?php endif; ?>
-      <?php endforeach; ?>
-    }
-    <?php endif; ?>
-  } else {
-    importationGroup.style.display = 'none';
-  }
-}
-
-// Gestion des onglets
-function showTab(tabName) {
-  // Masquer tous les onglets
-  document.querySelectorAll('.tab-content').forEach(function(tab) {
-    tab.classList.remove('active');
-  });
-  
-  // Désactiver tous les liens
-  document.querySelectorAll('.nav-tabs li').forEach(function(li) {
-    li.classList.remove('active');
-  });
-  
-  // Activer l'onglet sélectionné
-  document.getElementById('tab-' + tabName).classList.add('active');
-  
-  // Activer le lien correspondant
-  document.querySelector('a[href="#tab-' + tabName + '"]').parentNode.classList.add('active');
-}
-
 // Validation du formulaire
 $(document).ready(function() {
-  $('#paymentForm').on('submit', function(e) {
+  $('form').on('submit', function(e) {
     var amount = parseFloat($('#amount').val()) || 0;
     var availableCash = <?php echo $availableCash; ?>;
     
@@ -975,15 +670,7 @@ $(document).ready(function() {
   // Auto-sélectionner le fournisseur si passé en paramètre
   <?php if ($selectedSupplier > 0): ?>
   $('#supplierid').val(<?php echo $selectedSupplier; ?>);
-  loadSupplierImportations();
   <?php endif; ?>
-  
-  // Initialiser DataTables
-  $('.data-table').dataTable({
-    "aaSorting": [[ 0, "desc" ]],
-    "iDisplayLength": 25,
-    "aLengthMenu": [[10, 25, 50, -1], [10, 25, 50, "Tout"]]
-  });
 });
 </script>
 </body>
